@@ -51,3 +51,7 @@ htmlcov/
 
 # Node (for any JS tooling)
 node_modules/
+
+# Claude Code
+CLAUDE.md
+.claude/
