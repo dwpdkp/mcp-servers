@@ -9,6 +9,7 @@ This repository contains multiple MCP server implementations that extend AI assi
 | Project | Description | Language |
 |---------|-------------|----------|
 | **fastmcp** | Comprehensive framework for building MCP servers and clients | Python 3.10+ |
+| **bacularis-mcp** | Read-only access to Bacula/Bareos backup management via Bacularis API | Python 3.10+ |
 | **mcp_youtube_dlp** | YouTube video and audio download tools | Python 3.13+ |
 | **weather** | Weather information retrieval | Python |
 
