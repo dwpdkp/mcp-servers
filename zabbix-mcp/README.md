@@ -26,18 +26,18 @@ Installed automatically to: `~/.local/share/uv/tools/zabbix-mcp/`
 {
   "mcpServers": {
     "zabbix": {
-      "command": "/Users/dougpearson/.local/bin/uvx",
+      "command": "~/.local/bin/uvx",
       "args": ["zabbix-mcp"],
       "env": {
-        "ZABBIX_URL": "http://10.0.1.103/zabbix/api_jsonrpc.php",
-        "ZABBIX_TOKEN": "<token-from-enigma-22172>"
+        "ZABBIX_URL": "http://your-zabbix-server/zabbix/api_jsonrpc.php",
+        "ZABBIX_TOKEN": "<your-zabbix-api-token>"
       }
     }
   }
 }
 ```
 
-Currently configured in: `/Users/dougpearson/Downloads/Dev-Stuff/.mcp.json`
+Add this to your project's `.mcp.json` file.
 
 ### Environment Variables
 
@@ -49,12 +49,14 @@ Currently configured in: `/Users/dougpearson/Downloads/Dev-Stuff/.mcp.json`
 | `ZABBIX_TIMEOUT` | No | `30` | HTTP request timeout in seconds |
 | `ZABBIX_DEBUG` | No | `false` | Enable debug logging |
 
-## Homelab Connection
+## Authentication
 
-- **Zabbix Instance**: `10.0.1.103` (HTTP, not HTTPS)
-- **API Endpoint**: `http://10.0.1.103/zabbix/api_jsonrpc.php`
-- **API Token**: Enigma ID `22172` (field: `token`)
-- **User Accounts**: Enigma ID `22169` (doug.pearson), `22170` (Admin)
+The server supports two authentication methods:
+
+1. **API Token** (Zabbix 5.4+): Set `ZABBIX_TOKEN` with an API token generated in the Zabbix frontend
+2. **User/Password**: Set `ZABBIX_USER` and `ZABBIX_PASSWORD` instead of `ZABBIX_TOKEN` — creates a session that auto-reconnects on expiry
+
+User/password auth is recommended for long-running MCP sessions as it handles session expiry gracefully.
 
 ## Available Tools (46)
 
