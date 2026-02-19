@@ -3,8 +3,8 @@
 MCP server that exposes the Zabbix monitoring system as a set of tools for AI assistants.
 
 - **Package**: [zabbix-mcp on PyPI](https://pypi.org/project/zabbix-mcp/)
-- **Source**: [GitLab - radek-sprta/zabbix-mcp](https://gitlab.com/radek-sprta/zabbix-mcp)
-- **Version**: 0.7.0
+- **Source**: [GitHub - mhajder/zabbix-mcp](https://github.com/mhajder/zabbix-mcp)
+- **Version**: 0.2.0 (actual installed; PyPI latest)
 - **License**: MIT
 - **Python**: >= 3.13
 
