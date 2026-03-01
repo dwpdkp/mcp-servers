@@ -29,7 +29,7 @@ Add to `.mcp.json`:
   "command": "/path/to/bacularis-mcp/.venv/bin/python",
   "args": ["/path/to/bacularis-mcp/main.py"],
   "env": {
-    "BACULARIS_URL": "http://10.100.0.42:9097",
+    "BACULARIS_URL": "http://your-bacularis-server:9097",
     "BACULARIS_USER": "mcp-service",
     "BACULARIS_PASSWORD": "see enigma 22178"
   }
