@@ -7,11 +7,9 @@ MCP server for the UniFi local controller API. Provides read and write access to
 - Python 3.10+
 - [uv](https://github.com/astral-sh/uv)
 - UniFi OS 3+ gateway (Cloud Gateway Ultra, UDM, UDM Pro, etc.)
-- An API key generated in the UniFi Network UI
+- An API key generated in the UniFi Network UI (Settings → System → API)
 
 ## Configuration
-
-Set these environment variables (or use the `.mcp.json` `env` block):
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -46,14 +44,14 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 
 | Tool | Description |
 |---|---|
-| `list_clients` | Active (or all) network clients with MAC, IP, hostname, SSID |
-| `list_devices` | All adopted UniFi devices (APs, switches, gateway) |
-| `get_device_stats` | Per-device CPU, memory, uptime, satisfaction, and per-port TX/RX stats |
-| `get_client_history` | All clients ever seen — last IP, last network, device type |
-| `get_system_info` | Gateway firmware version, hostname, uptime, timezone |
-| `restart_device` | Reboot an AP, switch, or gateway by MAC address |
-| `block_client` | Block a client from the network by MAC address |
+| `list_clients` | Active (or all) network clients — MAC, IP, hostname, SSID, uptime |
+| `list_devices` | All adopted UniFi devices (APs, switches, gateway) via integrations API |
+| `get_device_stats` | Per-device CPU, memory, uptime, satisfaction score, and per-port TX/RX byte counts |
+| `get_client_history` | All clients ever seen — last IP, last network, device type, blocked status |
+| `get_system_info` | Gateway firmware version, build, hostname, uptime, timezone |
+| `block_client` | Block a client from the network by MAC address (disconnects immediately) |
 | `unblock_client` | Unblock a previously blocked client by MAC address |
+| `restart_device` | Reboot an AP, switch, or gateway by MAC address (**disruptive — causes ~60s outage**) |
 
 ### DHCP
 
@@ -67,43 +65,49 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 
 | Tool | Description |
 |---|---|
-| `list_wlans` | All SSIDs with security type and VLAN |
-| `update_wlan` | Update a WiFi network by `_id` — name, enabled, passphrase, security, VLAN |
-| `list_rogue_aps` | Nearby APs detected by your APs; `rogue_only=True` for flagged ones only |
+| `list_wlans` | All SSIDs — name, enabled state, security type, VLAN |
+| `update_wlan` | Update a WiFi network by `_id` — name, enabled, passphrase, security mode, VLAN |
+| `list_rogue_aps` | Nearby APs detected by your APs; `rogue_only=True` for UniFi-flagged rogues only |
 
 ### Firewall
 
 | Tool | Description |
 |---|---|
-| `list_firewall_policies` | Zone-based firewall rules; filter by `include_predefined` and `action_filter` |
-| `get_firewall_policy` | Fetch a single policy by `_id` (returns full raw object) |
-| `update_firewall_policy` | Update an existing policy by `_id` — name, action, enabled, logging, protocol, ip_version |
-| `set_firewall_policy_logging` | Enable or disable logging on a specific policy |
-| `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules |
+| `list_firewall_policies` | Zone-based firewall rules; filter by `include_predefined` and `action_filter` (`ALLOW`/`BLOCK`) |
+| `get_firewall_policy` | Fetch a single policy by `_id` (returns full raw object for inspection before editing) |
+| `update_firewall_policy` | Update a policy by `_id` — name, action, enabled, logging, protocol, ip_version |
+| `set_firewall_policy_logging` | Enable or disable logging on a specific policy by `_id` |
+| `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules at once |
 | `list_firewall_groups` | Address and port groups used as rule sources/destinations |
-| `update_firewall_group` | Replace the member IPs/CIDRs of an address group by `_id` |
+| `update_firewall_group` | Replace the full member list (IPs/CIDRs) of an address group by `_id` |
 | `list_port_forwards` | All WAN → LAN NAT / port forward rules |
 | `create_port_forward` | Create a new port forward rule |
-| `update_port_forward` | Update an existing port forward by `_id` — any field (proto, fwd IP, port, enabled, log, src) |
+| `update_port_forward` | Update an existing port forward by `_id` — proto, fwd IP, ports, enabled, src, log |
 | `delete_port_forward` | Delete a port forward rule by `_id` (permanent) |
 
 ### Network Configuration
 
 | Tool | Description |
 |---|---|
-| `list_networks` | All VLANs and subnets with purpose, DHCP ranges, and VLAN IDs |
-| `list_switch_port_profiles` | Switch port profiles (VLAN trunk and native VLAN assignments) |
+| `list_networks` | All VLANs and subnets — name, purpose, subnet, VLAN ID, DHCP range |
+| `list_switch_port_profiles` | Switch port profiles — native VLAN, trunk mode, PoE, 802.1X config |
 
 ### Site
 
 | Tool | Description |
 |---|---|
-| `get_site_stats` | Site health summary: WAN, LAN, WLAN, VPN subsystem status |
+| `get_site_stats` | Site health summary — WAN, LAN, WLAN, VPN subsystem status and client counts |
+
+## Security
+
+All `_id` parameters are validated against a strict `^[a-f0-9]{24}$` pattern (MongoDB ObjectID format) before being interpolated into URL paths. Any value containing path traversal characters (`/`, `..`, `%`, `?`, `#`) or that doesn't match the 24-character hex format is rejected with a `ValueError` before any HTTP request is made.
 
 ## API notes
 
-- Uses the `X-API-KEY` header (UniFi OS 3+). Cookie-based session auth is not used.
-- Firewall policies use the v2 API (`/proxy/network/v2/api/site/{site}/firewall-policies`). The legacy `/rest/firewallrule` endpoint returns empty on zone-based firewall setups.
-- The `list_firewall_policies` tool returns custom rules only by default (`include_predefined=False`). Pass `include_predefined=True` to see all 100+ built-in rules.
-- Event/alarm log endpoints return 404 on current UCG firmware — not supported.
-- Bandwidth report endpoints exist but return stub data only — not implemented.
+- Uses the `X-API-KEY` header (UniFi OS 3+). Cookie-based session auth is not supported.
+- Firewall policies use the v2 API (`/proxy/network/v2/api/site/{site}/firewall-policies`). The legacy `/rest/firewallrule` endpoint returns empty on zone-based firewall setups (UCG and newer).
+- `list_firewall_policies` returns custom rules only by default (`include_predefined=False`). Pass `include_predefined=True` to include all 100+ UniFi-managed built-in rules.
+- `update_firewall_group` replaces the entire member list — fetch current members with `list_firewall_groups` first and include all IPs you want to keep.
+- Event/alarm log endpoints return 404 on current UCG firmware — not supported via this API path.
+- Bandwidth report endpoints (`/stat/report/hourly.site`) respond 200 but return only stub data — not implemented.
+- `restart_device` takes effect immediately and causes a device outage of approximately 30–90 seconds. Restarting an AP disconnects all wireless clients on that AP.
