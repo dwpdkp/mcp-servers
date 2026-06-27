@@ -1,6 +1,7 @@
 """UniFi local controller MCP server — X-API-KEY auth for UCG/UDM (UniFi OS 3+)."""
 
 import os
+import re
 from typing import Any
 
 import httpx
@@ -27,6 +28,16 @@ def _api(path: str) -> str:
 
 def _v2(path: str) -> str:
     return f"{UNIFI_URL}/proxy/network/v2/api/site/{UNIFI_SITE}{path}"
+
+
+# UniFi resource IDs are 24-char hex MongoDB ObjectIDs. Validate before interpolating
+# into URL paths to prevent path traversal (e.g. "../../admin").
+_ID_RE = re.compile(r"^[a-f0-9]{24}$")
+
+def _safe_id(value: str, name: str = "id") -> str:
+    if not _ID_RE.match(value):
+        raise ValueError(f"Invalid {name} format: must be a 24-character hex string")
+    return value
 
 
 async def _get_site_id() -> str:
@@ -191,6 +202,7 @@ async def list_firewall_policies(
 @mcp.tool()
 async def get_firewall_policy(policy_id: str) -> dict[str, Any]:
     """Get a single firewall policy by its _id (returns full raw object)."""
+    _safe_id(policy_id, "policy_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
         r.raise_for_status()
@@ -221,6 +233,7 @@ async def update_firewall_policy(
         protocol: Protocol to match — "all", "tcp", "udp", "tcp_udp", "icmp", "icmpv6".
         ip_version: "IPV4", "IPV6", or "BOTH".
     """
+    _safe_id(policy_id, "policy_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
         r.raise_for_status()
@@ -252,6 +265,7 @@ async def set_firewall_policy_logging(policy_id: str, enabled: bool) -> dict[str
     Fetch the policy first with get_firewall_policy to confirm the _id, then call this
     to toggle logging. Returns the updated policy summary.
     """
+    _safe_id(policy_id, "policy_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
         r.raise_for_status()
@@ -369,6 +383,7 @@ async def update_port_forward(
         src: Source IP restriction — "any" or a specific IP/CIDR.
         log: Enable or disable logging for this rule.
     """
+    _safe_id(port_forward_id, "port_forward_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers())
         r.raise_for_status()
@@ -646,6 +661,7 @@ async def delete_port_forward(port_forward_id: str) -> dict[str, Any]:
 
     Use list_port_forwards to find the _id before calling this. This is permanent.
     """
+    _safe_id(port_forward_id, "port_forward_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.delete(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers())
         r.raise_for_status()
@@ -673,6 +689,7 @@ async def update_wlan(
         security: Security mode — "wpapsk" (WPA2), "wpa3" (WPA3), "open".
         vlan: VLAN ID to tag traffic onto (0 or None for untagged).
     """
+    _safe_id(wlan_id, "wlan_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers())
         r.raise_for_status()
@@ -715,6 +732,7 @@ async def update_firewall_group(
         group_id: The _id of the firewall group to update.
         members: Complete list of IP addresses or CIDRs for the group.
     """
+    _safe_id(group_id, "group_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/firewallgroup/{group_id}"), headers=_headers())
         r.raise_for_status()
