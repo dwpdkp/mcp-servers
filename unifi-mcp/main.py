@@ -198,6 +198,54 @@ async def get_firewall_policy(policy_id: str) -> dict[str, Any]:
 
 
 @mcp.tool()
+async def update_firewall_policy(
+    policy_id: str,
+    name: str | None = None,
+    action: str | None = None,
+    enabled: bool | None = None,
+    logging: bool | None = None,
+    protocol: str | None = None,
+    ip_version: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing firewall policy by its _id.
+
+    Only the fields you provide are changed — all others keep their current values.
+    Use list_firewall_policies or get_firewall_policy to find the _id first.
+
+    Args:
+        policy_id: The _id of the firewall policy to update.
+        name: Display name for the rule.
+        action: "ALLOW" or "BLOCK".
+        enabled: Enable or disable the rule.
+        logging: Enable or disable logging for matched traffic.
+        protocol: Protocol to match — "all", "tcp", "udp", "tcp_udp", "icmp", "icmpv6".
+        ip_version: "IPV4", "IPV6", or "BOTH".
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
+        r.raise_for_status()
+        policy = r.json()
+
+        if name is not None:
+            policy["name"] = name
+        if action is not None:
+            policy["action"] = action.upper()
+        if enabled is not None:
+            policy["enabled"] = enabled
+        if logging is not None:
+            policy["logging"] = logging
+        if protocol is not None:
+            policy["protocol"] = protocol
+        if ip_version is not None:
+            policy["ip_version"] = ip_version.upper()
+
+        r2 = await c.put(_v2(f"/firewall-policies/{policy_id}"), headers=_headers(), json=policy)
+        r2.raise_for_status()
+        updated = r2.json()
+    return _summarize_policy(updated if isinstance(updated, dict) else policy)
+
+
+@mcp.tool()
 async def set_firewall_policy_logging(policy_id: str, enabled: bool) -> dict[str, Any]:
     """Enable or disable logging on a specific firewall policy by its _id.
 

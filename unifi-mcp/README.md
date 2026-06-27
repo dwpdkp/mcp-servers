@@ -73,6 +73,7 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 |---|---|
 | `list_firewall_policies` | Zone-based firewall rules; filter by `include_predefined` and `action_filter` |
 | `get_firewall_policy` | Fetch a single policy by `_id` (returns full raw object) |
+| `update_firewall_policy` | Update an existing policy by `_id` — name, action, enabled, logging, protocol, ip_version |
 | `set_firewall_policy_logging` | Enable or disable logging on a specific policy |
 | `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules |
 | `list_firewall_groups` | Address and port groups used as rule sources/destinations |
