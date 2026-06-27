@@ -51,6 +51,9 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 | `get_device_stats` | Per-device CPU, memory, uptime, satisfaction, and per-port TX/RX stats |
 | `get_client_history` | All clients ever seen — last IP, last network, device type |
 | `get_system_info` | Gateway firmware version, hostname, uptime, timezone |
+| `restart_device` | Reboot an AP, switch, or gateway by MAC address |
+| `block_client` | Block a client from the network by MAC address |
+| `unblock_client` | Unblock a previously blocked client by MAC address |
 
 ### DHCP
 
@@ -65,6 +68,7 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 | Tool | Description |
 |---|---|
 | `list_wlans` | All SSIDs with security type and VLAN |
+| `update_wlan` | Update a WiFi network by `_id` — name, enabled, passphrase, security, VLAN |
 | `list_rogue_aps` | Nearby APs detected by your APs; `rogue_only=True` for flagged ones only |
 
 ### Firewall
@@ -77,8 +81,11 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 | `set_firewall_policy_logging` | Enable or disable logging on a specific policy |
 | `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules |
 | `list_firewall_groups` | Address and port groups used as rule sources/destinations |
+| `update_firewall_group` | Replace the member IPs/CIDRs of an address group by `_id` |
 | `list_port_forwards` | All WAN → LAN NAT / port forward rules |
+| `create_port_forward` | Create a new port forward rule |
 | `update_port_forward` | Update an existing port forward by `_id` — any field (proto, fwd IP, port, enabled, log, src) |
+| `delete_port_forward` | Delete a port forward rule by `_id` (permanent) |
 
 ### Network Configuration
 

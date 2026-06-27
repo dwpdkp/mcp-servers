@@ -584,5 +584,199 @@ async def get_device_stats() -> list[dict[str, Any]]:
     return results
 
 
+# ── Write Operations ──────────────────────────────────────────────────────────
+
+@mcp.tool()
+async def create_port_forward(
+    name: str,
+    fwd: str,
+    dst_port: str,
+    fwd_port: str,
+    proto: str = "tcp",
+    src: str = "any",
+    enabled: bool = True,
+    log: bool = False,
+) -> dict[str, Any]:
+    """Create a new port forward (WAN → LAN NAT) rule.
+
+    Args:
+        name: Display name for the rule.
+        fwd: LAN IP address to forward traffic to.
+        dst_port: WAN-side port or range to listen on (e.g. "8080", "8000-8090").
+        fwd_port: LAN-side port or range to forward to (e.g. "80", "8000-8090").
+        proto: Protocol — "tcp", "udp", or "tcp_udp" (default "tcp").
+        src: Source IP restriction — "any" or a specific IP/CIDR (default "any").
+        enabled: Whether the rule is active (default True).
+        log: Enable logging for this rule (default False).
+    """
+    payload: dict[str, Any] = {
+        "pfwd_interface": "wan",
+        "name": name,
+        "proto": proto,
+        "dst_port": dst_port,
+        "fwd": fwd,
+        "fwd_port": fwd_port,
+        "src": src,
+        "enabled": enabled,
+        "log": log,
+        "destination_ip": "any",
+        "destination_ips": [],
+    }
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.post(_api("/rest/portforward"), headers=_headers(), json=payload)
+        r.raise_for_status()
+    created = r.json().get("data", [{}])[0]
+    return {
+        "_id": created.get("_id"),
+        "name": created.get("name"),
+        "enabled": created.get("enabled", True),
+        "interface": created.get("pfwd_interface"),
+        "proto": created.get("proto"),
+        "dst_port": created.get("dst_port"),
+        "fwd": created.get("fwd"),
+        "fwd_port": created.get("fwd_port"),
+        "src": created.get("src", "any"),
+        "log": created.get("log", False),
+    }
+
+
+@mcp.tool()
+async def delete_port_forward(port_forward_id: str) -> dict[str, Any]:
+    """Delete a port forward rule by its _id.
+
+    Use list_port_forwards to find the _id before calling this. This is permanent.
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.delete(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers())
+        r.raise_for_status()
+    return {"status": "deleted", "_id": port_forward_id}
+
+
+@mcp.tool()
+async def update_wlan(
+    wlan_id: str,
+    name: str | None = None,
+    enabled: bool | None = None,
+    passphrase: str | None = None,
+    security: str | None = None,
+    vlan: int | None = None,
+) -> dict[str, Any]:
+    """Update a WiFi network (SSID) configuration by its _id.
+
+    Use list_wlans to find the _id and current values first. Only provided fields are changed.
+
+    Args:
+        wlan_id: The _id of the WLAN to update.
+        name: SSID name (the network name clients see).
+        enabled: Enable or disable the SSID.
+        passphrase: WiFi password (WPA-PSK networks only).
+        security: Security mode — "wpapsk" (WPA2), "wpa3" (WPA3), "open".
+        vlan: VLAN ID to tag traffic onto (0 or None for untagged).
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers())
+        r.raise_for_status()
+        wlan = r.json().get("data", [{}])[0]
+
+        if name is not None:
+            wlan["name"] = name
+        if enabled is not None:
+            wlan["enabled"] = enabled
+        if passphrase is not None:
+            wlan["x_passphrase"] = passphrase
+        if security is not None:
+            wlan["security"] = security
+        if vlan is not None:
+            wlan["vlan"] = vlan
+            wlan["vlan_enabled"] = vlan > 0
+
+        r2 = await c.put(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers(), json=wlan)
+        r2.raise_for_status()
+    return {
+        "_id": wlan.get("_id"),
+        "name": wlan.get("name"),
+        "enabled": wlan.get("enabled"),
+        "security": wlan.get("security"),
+        "vlan": wlan.get("vlan"),
+    }
+
+
+@mcp.tool()
+async def update_firewall_group(
+    group_id: str,
+    members: list[str],
+) -> dict[str, Any]:
+    """Replace the members of a firewall address group by its _id.
+
+    Provide the full desired member list — this replaces all existing members.
+    Use list_firewall_groups to find the _id and current members first.
+
+    Args:
+        group_id: The _id of the firewall group to update.
+        members: Complete list of IP addresses or CIDRs for the group.
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_api(f"/rest/firewallgroup/{group_id}"), headers=_headers())
+        r.raise_for_status()
+        group = r.json().get("data", [{}])[0]
+        group["group_members"] = members
+        r2 = await c.put(_api(f"/rest/firewallgroup/{group_id}"), headers=_headers(), json=group)
+        r2.raise_for_status()
+        updated = r2.json().get("data", [{}])[0]
+    return {
+        "_id": updated.get("_id"),
+        "name": updated.get("name"),
+        "group_type": updated.get("group_type"),
+        "group_members": updated.get("group_members", []),
+    }
+
+
+@mcp.tool()
+async def block_client(mac: str) -> dict[str, Any]:
+    """Block a client device from the network by MAC address.
+
+    The device will be disconnected and prevented from reconnecting until unblocked.
+    Use unblock_client to reverse this.
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.post(
+            _api("/cmd/stamgr"),
+            headers=_headers(),
+            json={"cmd": "block-sta", "mac": mac.lower()},
+        )
+        r.raise_for_status()
+    return {"status": "blocked", "mac": mac.lower()}
+
+
+@mcp.tool()
+async def unblock_client(mac: str) -> dict[str, Any]:
+    """Unblock a previously blocked client device by MAC address."""
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.post(
+            _api("/cmd/stamgr"),
+            headers=_headers(),
+            json={"cmd": "unblock-sta", "mac": mac.lower()},
+        )
+        r.raise_for_status()
+    return {"status": "unblocked", "mac": mac.lower()}
+
+
+@mcp.tool()
+async def restart_device(mac: str) -> dict[str, Any]:
+    """Reboot a UniFi device (AP, switch, or gateway) by its MAC address.
+
+    The device will be temporarily offline during restart (typically 30-90 seconds).
+    Use get_device_stats to find the MAC address of the device to restart.
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.post(
+            _api("/cmd/devmgr"),
+            headers=_headers(),
+            json={"cmd": "restart", "mac": mac.lower()},
+        )
+        r.raise_for_status()
+    return {"status": "restart_initiated", "mac": mac.lower()}
+
+
 if __name__ == "__main__":
     mcp.run()
