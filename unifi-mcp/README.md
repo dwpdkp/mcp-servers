@@ -77,6 +77,7 @@ Set these environment variables (or use the `.mcp.json` `env` block):
 | `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules |
 | `list_firewall_groups` | Address and port groups used as rule sources/destinations |
 | `list_port_forwards` | All WAN → LAN NAT / port forward rules |
+| `update_port_forward` | Update an existing port forward by `_id` — any field (proto, fwd IP, port, enabled, log, src) |
 
 ### Network Configuration
 

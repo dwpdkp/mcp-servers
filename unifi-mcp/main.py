@@ -294,6 +294,74 @@ async def list_port_forwards() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
+async def update_port_forward(
+    port_forward_id: str,
+    name: str | None = None,
+    enabled: bool | None = None,
+    proto: str | None = None,
+    dst_port: str | None = None,
+    fwd: str | None = None,
+    fwd_port: str | None = None,
+    src: str | None = None,
+    log: bool | None = None,
+) -> dict[str, Any]:
+    """Update an existing port forward rule by its _id.
+
+    Only the fields you provide are changed — all others keep their current values.
+    Use list_port_forwards to find the _id and current values before calling this.
+
+    Args:
+        port_forward_id: The _id of the port forward rule to update.
+        name: Display name for the rule.
+        enabled: Enable or disable the rule.
+        proto: Protocol — "tcp", "udp", or "tcp_udp".
+        dst_port: Destination port or range on the WAN side (e.g. "80", "8000-8080").
+        fwd: LAN IP address to forward traffic to.
+        fwd_port: Port or range on the LAN destination (e.g. "80", "8000-8080").
+        src: Source IP restriction — "any" or a specific IP/CIDR.
+        log: Enable or disable logging for this rule.
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers())
+        r.raise_for_status()
+        rule = r.json().get("data", [{}])[0]
+
+        if name is not None:
+            rule["name"] = name
+        if enabled is not None:
+            rule["enabled"] = enabled
+        if proto is not None:
+            rule["proto"] = proto
+        if dst_port is not None:
+            rule["dst_port"] = dst_port
+        if fwd is not None:
+            rule["fwd"] = fwd
+        if fwd_port is not None:
+            rule["fwd_port"] = fwd_port
+        if src is not None:
+            rule["src"] = src
+        if log is not None:
+            rule["log"] = log
+
+        r2 = await c.put(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers(), json=rule)
+        r2.raise_for_status()
+        updated = r2.json().get("data", [{}])[0]
+
+    return {
+        "_id": updated.get("_id"),
+        "name": updated.get("name"),
+        "enabled": updated.get("enabled", True),
+        "interface": updated.get("pfwd_interface"),
+        "proto": updated.get("proto"),
+        "dst_port": updated.get("dst_port"),
+        "fwd": updated.get("fwd"),
+        "fwd_port": updated.get("fwd_port"),
+        "src": updated.get("src", "any"),
+        "log": updated.get("log", False),
+    }
+
+
+@mcp.tool()
 async def list_networks() -> list[dict[str, Any]]:
     """List all configured network segments (VLANs, subnets, purposes)."""
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
