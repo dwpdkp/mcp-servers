@@ -1,0 +1,19 @@
+{
+  "safe_tools": [
+    "list_nodes",
+    "list_vms",
+    "list_lxc_containers",
+    "get_instance_config",
+    "get_lxc_interfaces",
+    "list_storage",
+    "list_storage_content",
+    "get_task_status",
+    "get_task_log",
+    "get_mcp_logs",
+    "get_resource_usage",
+    "list_snapshots"
+  ],
+  "safe_command_patterns": [
+    "^(cat|ls|df|free|uname|uptime|hostname|ip|ps|top|systemctl status)\\b.*"
+  ]
+}

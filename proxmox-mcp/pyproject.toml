@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "proxmox-mcp"
+version = "0.1.0"
+description = "MCP server for managing Proxmox VE infrastructure"
+readme = "README.md"
+license = "MIT"
+authors = [{name = "Joachim Schneider", email = "joachim@josky.de"}]
+requires-python = ">=3.10"
+keywords = ["mcp", "proxmox", "virtualization", "model-context-protocol"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Systems Administration",
+]
+dependencies = [
+    "mcp>=1.0,<2.0",
+    "pydantic>=2.0.0",
+    "httpx>=0.24.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-httpx>=0.30",
+]
+
+[project.urls]
+Homepage = "https://github.com/josky-com/proxmox-mcp"
+Repository = "https://github.com/josky-com/proxmox-mcp"
+Issues = "https://github.com/josky-com/proxmox-mcp/issues"
+
+[project.scripts]
+proxmox-mcp = "proxmox_mcp.server:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
