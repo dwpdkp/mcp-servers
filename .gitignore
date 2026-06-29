@@ -58,3 +58,6 @@ CLAUDE.md
 
 # MCP config (machine-specific paths)
 .mcp.json
+
+# Nested repos
+proxmox-mcp/
