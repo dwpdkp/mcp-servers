@@ -58,3 +58,6 @@ CLAUDE.md
 
 # MCP config (machine-specific paths)
 .mcp.json
+
+# PDFs are generated output (pandoc/weasyprint) — regenerate as needed
+*.pdf
