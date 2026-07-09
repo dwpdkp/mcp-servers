@@ -61,3 +61,8 @@ CLAUDE.md
 
 # PDFs are generated output (pandoc/weasyprint) — regenerate as needed
 *.pdf
+
+# unraid-mcp is a fork of jmagar/unraid-mcp, kept as its own independent
+# git repo (origin=dwpdkp/unraid-mcp, upstream=jmagar/unraid-mcp) so it can
+# track upstream and be shared/PR'd independently
+unraid-mcp/
