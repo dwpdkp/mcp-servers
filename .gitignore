@@ -66,3 +66,8 @@ CLAUDE.md
 # git repo (origin=dwpdkp/unraid-mcp, upstream=jmagar/unraid-mcp) so it can
 # track upstream and be shared/PR'd independently
 unraid-mcp/
+
+# zabbix-mcp is a fork of mhajder/zabbix-mcp, kept as its own independent
+# git repo (origin=dwpdkp/zabbix-mcp, upstream=mhajder/zabbix-mcp) so it can
+# track upstream and be shared/PR'd independently
+zabbix-mcp/
