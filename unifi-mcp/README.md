@@ -65,7 +65,7 @@ MCP server for the UniFi local controller API. Provides read and write access to
 
 | Tool | Description |
 |---|---|
-| `list_wlans` | All SSIDs — name, enabled state, security type, VLAN |
+| `list_wlans` | All SSIDs — name, enabled state, security type, VLAN, bound `networkconf_id`, L2 isolation |
 | `update_wlan` | Update a WiFi network by `_id` — name, enabled, passphrase, security mode, VLAN |
 | `list_rogue_aps` | Nearby APs detected by your APs; `rogue_only=True` for UniFi-flagged rogues only |
 
@@ -75,6 +75,7 @@ MCP server for the UniFi local controller API. Provides read and write access to
 |---|---|
 | `list_firewall_policies` | Zone-based firewall rules; filter by `include_predefined` and `action_filter` (`ALLOW`/`BLOCK`) |
 | `get_firewall_policy` | Fetch a single policy by `_id` (returns full raw object for inspection before editing) |
+| `create_firewall_policy` | Create a new zone-based rule — src/dst zone + network targeting, action, protocol, auto-respond |
 | `update_firewall_policy` | Update a policy by `_id` — name, action, enabled, logging, protocol, ip_version |
 | `set_firewall_policy_logging` | Enable or disable logging on a specific policy by `_id` |
 | `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules at once |
@@ -89,7 +90,7 @@ MCP server for the UniFi local controller API. Provides read and write access to
 
 | Tool | Description |
 |---|---|
-| `list_networks` | All VLANs and subnets — name, purpose, subnet, VLAN ID, DHCP range |
+| `list_networks` | All VLANs and subnets — name, purpose, subnet, VLAN ID, DHCP range, `firewall_zone_id` (which zone-based firewall zone the network belongs to — cross-reference with `list_firewall_policies` zone IDs to check isolation), mDNS/network-isolation flags |
 | `list_switch_port_profiles` | Switch port profiles — native VLAN, trunk mode, PoE, 802.1X config |
 
 ### Site
@@ -111,3 +112,4 @@ All `_id` parameters are validated against a strict `^[a-f0-9]{24}$` pattern (Mo
 - Event/alarm log endpoints return 404 on current UCG firmware — not supported via this API path.
 - Bandwidth report endpoints (`/stat/report/hourly.site`) respond 200 but return only stub data — not implemented.
 - `restart_device` takes effect immediately and causes a device outage of approximately 30–90 seconds. Restarting an AP disconnects all wireless clients on that AP.
+- There is no dedicated firewall-zone-listing endpoint (`/v2/api/site/{site}/firewall/zones` and similar paths all 404 on UCG Ultra 5.1.19). Zone names are rendered client-side in the UI from a static list and aren't fetchable via API. To check whether two networks share a zone (and therefore share the same intra-zone allow/deny default), compare `firewall_zone_id` from `list_networks` — matching IDs mean matching zones, even without a human-readable name.

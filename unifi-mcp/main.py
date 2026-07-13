@@ -163,7 +163,18 @@ async def list_wlans() -> list[dict[str, Any]]:
         r = await c.get(_api("/rest/wlanconf"), headers=_headers())
         r.raise_for_status()
     data = r.json().get("data", [])
-    return [{"name": d.get("name"), "enabled": d.get("enabled"), "security": d.get("security"), "vlan": d.get("vlan")} for d in data]
+    return [
+        {
+            "_id": d.get("_id"),
+            "name": d.get("name"),
+            "enabled": d.get("enabled"),
+            "security": d.get("security"),
+            "vlan": d.get("vlan"),
+            "networkconf_id": d.get("networkconf_id"),
+            "l2_isolation": d.get("l2_isolation", False),
+        }
+        for d in data
+    ]
 
 
 @mcp.tool()
@@ -256,6 +267,99 @@ async def update_firewall_policy(
         r2.raise_for_status()
         updated = r2.json()
     return _summarize_policy(updated if isinstance(updated, dict) else policy)
+
+
+@mcp.tool()
+async def create_firewall_policy(
+    name: str,
+    action: str,
+    src_zone_id: str,
+    dst_zone_id: str,
+    src_network_ids: list[str] | None = None,
+    dst_network_ids: list[str] | None = None,
+    src_target: str = "NETWORK",
+    dst_target: str = "NETWORK",
+    protocol: str = "all",
+    ip_version: str = "BOTH",
+    enabled: bool = True,
+    logging: bool = False,
+    create_allow_respond: bool = True,
+    connection_state_type: str = "ALL",
+) -> dict[str, Any]:
+    """Create a new firewall policy (zone-based rule, UniFi OS 3+ / UCG).
+
+    Use list_networks to find zone_id (the `firewall_zone_id` field) and network _ids, and
+    list_firewall_policies (or get_firewall_policy on an existing similar rule) to confirm the
+    exact zone_id values in use on your site before calling this.
+
+    For a same-zone network-to-network rule (e.g. "allow Default to reach IoT"), src_zone_id and
+    dst_zone_id will be identical — same-zone traffic between networks in a zone-based firewall is
+    deny-by-default unless punched through with an explicit rule like this.
+
+    Args:
+        name: Display name for the rule.
+        action: "ALLOW" or "BLOCK".
+        src_zone_id: Firewall zone _id for the source side.
+        dst_zone_id: Firewall zone _id for the destination side.
+        src_network_ids: List of network _ids to match as source (used when src_target="NETWORK").
+        dst_network_ids: List of network _ids to match as destination (used when dst_target="NETWORK").
+        src_target: "NETWORK", "IP", or "ANY" (default "NETWORK").
+        dst_target: "NETWORK", "IP", or "ANY" (default "NETWORK").
+        protocol: "all", "tcp", "udp", "tcp_udp", "icmp", "icmpv6" (default "all").
+        ip_version: "IPV4", "IPV6", or "BOTH" (default "BOTH").
+        enabled: Whether the rule is active (default True).
+        logging: Enable logging for matched traffic (default False).
+        create_allow_respond: For ALLOW rules, also auto-create the reverse RESPOND_ONLY rule so
+            return traffic isn't separately blocked (default True — matches UniFi UI default).
+        connection_state_type: "ALL", "NEW", "ESTABLISHED", "RESPOND_ONLY", or "CUSTOM" (default "ALL").
+    """
+    _safe_id(src_zone_id, "src_zone_id")
+    _safe_id(dst_zone_id, "dst_zone_id")
+    for nid in (src_network_ids or []) + (dst_network_ids or []):
+        _safe_id(nid, "network_id")
+    if action.upper() not in ("ALLOW", "BLOCK"):
+        raise ValueError("action must be 'ALLOW' or 'BLOCK'")
+
+    payload = {
+        "name": name,
+        "action": action.upper(),
+        "enabled": enabled,
+        "logging": logging,
+        "predefined": False,
+        "protocol": protocol,
+        "ip_version": ip_version.upper(),
+        "connection_state_type": connection_state_type.upper(),
+        "connection_states": [],
+        "create_allow_respond": create_allow_respond,
+        "description": "",
+        "icmp_typename": "ANY",
+        "icmp_v6_typename": "ANY",
+        "match_ip_sec": False,
+        "match_opposite_protocol": False,
+        "schedule": {"mode": "ALWAYS", "repeat_on_days": [], "time_all_day": False},
+        "source": {
+            "zone_id": src_zone_id,
+            "matching_target": src_target.upper(),
+            "network_ids": src_network_ids or [],
+            "match_mac": False,
+            "match_opposite_networks": False,
+            "match_opposite_ports": False,
+            "port_matching_type": "ANY",
+        },
+        "destination": {
+            "zone_id": dst_zone_id,
+            "matching_target": dst_target.upper(),
+            "network_ids": dst_network_ids or [],
+            "match_opposite_networks": False,
+            "match_opposite_ports": False,
+            "port_matching_type": "ANY",
+        },
+    }
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.post(_v2("/firewall-policies"), headers=_headers(), json=payload)
+        r.raise_for_status()
+        created = r.json()
+    return _summarize_policy(created if isinstance(created, dict) else payload)
 
 
 @mcp.tool()
@@ -443,6 +547,10 @@ async def list_networks() -> list[dict[str, Any]]:
             "dhcpd_stop": n.get("dhcpd_stop"),
             "domain_name": n.get("domain_name"),
             "igmp_snooping": n.get("igmp_snooping", False),
+            "firewall_zone_id": n.get("firewall_zone_id"),
+            "networkgroup": n.get("networkgroup"),
+            "network_isolation_enabled": n.get("network_isolation_enabled", False),
+            "mdns_enabled": n.get("mdns_enabled", False),
         }
         for n in data
     ]
