@@ -22,6 +22,17 @@ def load_safety_policy(project_root: str) -> Dict[str, Any]:
 
 def check_safety(tool_name: str, args: Optional[Dict[str, Any]], confirmed: bool, policy: Dict[str, Any], allow_danger: bool) -> None:
     """Enforces the safety policy. Raises ToolError if the action is blocked."""
+    if tool_name in policy.get("critical_tools", []):
+        if allow_danger and confirmed:
+            logger.info(f"SECURITY: Critical action '{tool_name}' proceeding with PROXMOX_ALLOW_DANGER and user confirmation.")
+            return
+        logger.warning(f"SECURITY: Blocked critical action '{tool_name}' (allow_danger={allow_danger}, confirmed={confirmed}).")
+        raise ToolError(
+            f"SECURITY ALERT: The tool '{tool_name}' is a critical-tier action and requires BOTH "
+            "the PROXMOX_ALLOW_DANGER environment variable to be set to 'true' AND explicit user "
+            "confirmation ('confirmed=true') to execute. Ask the user for permission first."
+        )
+
     if allow_danger:
         return
 

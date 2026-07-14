@@ -3,7 +3,7 @@
 The Proxmox REST API has no /exec endpoint for LXC containers. This tool
 SSHes to the Proxmox node and runs `pct exec` instead. Requires:
   - SSH access from the MCP server host to the Proxmox node hostname
-  - PROXMOX_SSH_USER env var (default: root)
+  - PROXMOX_SSH_USER env var (default: ansible)
   - The node hostname must be resolvable / reachable via SSH
 """
 
@@ -24,7 +24,7 @@ async def execute_lxc_command(node: str, vmid: int, command: str, confirmed: boo
     """Run a shell command inside an LXC container.
 
     SSHes to the Proxmox node and runs `pct exec <vmid> -- <command>`.
-    Requires SSH access to the node as PROXMOX_SSH_USER (default: root).
+    Requires SSH access to the node as PROXMOX_SSH_USER (default: ansible).
     """
     safe_node = sanitize_identifier(node)
     safe_vmid = sanitize_vmid(vmid)

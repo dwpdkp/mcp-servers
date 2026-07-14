@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,7 +22,31 @@ logger = setup_logger(PROJECT_ROOT)
 PROXMOX_URL = os.getenv("PROXMOX_URL")
 PROXMOX_TOKEN_NAME = os.getenv("PROXMOX_TOKEN_NAME")
 PROXMOX_TOKEN_VALUE = os.getenv("PROXMOX_TOKEN_VALUE")
-PROXMOX_VERIFY_SSL = os.getenv("PROXMOX_VERIFY_SSL", "true").lower() == "true"
+
+# TLS verification. Disabling it (PROXMOX_VERIFY_SSL=false) is gated behind a
+# SECOND explicit opt-in (PROXMOX_ALLOW_INSECURE_TLS=true) — with verification off,
+# the API token is sent to an unverified peer, exposing it to MITM interception.
+_raw_verify_ssl = os.getenv("PROXMOX_VERIFY_SSL", "true").lower()
+PROXMOX_ALLOW_INSECURE_TLS = os.getenv("PROXMOX_ALLOW_INSECURE_TLS", "false").lower() == "true"
+if _raw_verify_ssl in ("false", "0", "no"):
+    if not PROXMOX_ALLOW_INSECURE_TLS:
+        print(
+            "FATAL: PROXMOX_VERIFY_SSL is disabled but PROXMOX_ALLOW_INSECURE_TLS is not set. "
+            "Disabling TLS verification sends the Proxmox API token to an unverified peer, "
+            "exposing it to man-in-the-middle interception. Prefer installing a trusted cert "
+            "on the Proxmox node. To proceed anyway, set PROXMOX_ALLOW_INSECURE_TLS=true.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    logger.warning(
+        "SECURITY: TLS verification DISABLED for Proxmox API (PROXMOX_VERIFY_SSL=false, "
+        "PROXMOX_ALLOW_INSECURE_TLS=true). Connections are vulnerable to MITM interception "
+        "of the API token. Use only on trusted networks."
+    )
+    PROXMOX_VERIFY_SSL = False
+else:
+    PROXMOX_VERIFY_SSL = True
+
 PROXMOX_ALLOW_DANGER = os.getenv("PROXMOX_ALLOW_DANGER", "false").lower() == "true"
 PROXMOX_SSH_USER = os.getenv("PROXMOX_SSH_USER", "ansible")
 

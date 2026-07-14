@@ -13,6 +13,9 @@
     "get_resource_usage",
     "list_snapshots"
   ],
+  "critical_tools": [
+    "delete_instance"
+  ],
   "safe_command_patterns": [
     "^(cat|ls|df|free|uname|uptime|hostname|ip|ps|top|systemctl status)\\b.*"
   ]

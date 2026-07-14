@@ -44,6 +44,27 @@ _RUNNING_STATUSES = [
 ]
 
 
+def _reject_injection(value: str, name: str) -> str:
+    """Reject values that could inject extra bconsole commands via stdin.
+
+    _run() joins commands with '\\n' and pipes them to bconsole's REPL over
+    stdin — a newline embedded in an otherwise-legitimate argument (job name,
+    volume name, client name) would be interpreted as a second command.
+    """
+    if not value or "\n" in value or "\r" in value:
+        raise ValueError(f"Invalid {name}: must be non-empty and contain no newlines")
+    return value
+
+
+def _require_confirm(confirm: bool, action: str) -> None:
+    if not confirm:
+        raise ValueError(
+            f"SECURITY: {action} was not run. This is a destructive/high-impact Bacula "
+            "operation. Ask the user for explicit permission, then call again with "
+            "confirm=true."
+        )
+
+
 def _run(commands: list[str], timeout: int = 30) -> tuple[str, str]:
     """Send commands to bconsole on BACULA_HOST via SSH. Returns (stdout, stderr)."""
     input_str = "\n".join(commands) + "\nquit\n"
@@ -257,7 +278,7 @@ def list_running_jobs() -> list[dict]:
 
 
 @mcp.tool()
-def cancel_job(jobid: int) -> str:
+def cancel_job(jobid: int, confirm: bool = False) -> str:
     """Cancel a running or queued Bacula job.
 
     WARNING: Verify the job is actually a zombie (stuck with no real progress)
@@ -267,7 +288,9 @@ def cancel_job(jobid: int) -> str:
 
     Args:
         jobid: The Bacula job ID to cancel
+        confirm: Must be true to cancel. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"cancel_job({jobid})")
     stdout, stderr = _run([f"cancel jobid={jobid}"])
     if not stdout:
         return f"Error: {stderr[:200]}"
@@ -278,14 +301,24 @@ def cancel_job(jobid: int) -> str:
 
 
 @mcp.tool()
-def run_job(job_name: str, level: Optional[str] = None, client: Optional[str] = None) -> str:
+def run_job(
+    job_name: str,
+    level: Optional[str] = None,
+    client: Optional[str] = None,
+    confirm: bool = False,
+) -> str:
     """Start a Bacula backup job immediately.
 
     Args:
         job_name: Exact job name as defined in Bacula config (e.g. "SRS-Plastic-01 Plastic Data Backup")
         level: Override backup level: Full, Incremental, or Differential
         client: Override client name
+        confirm: Must be true to run the job. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"run_job({job_name!r})")
+    _reject_injection(job_name, "job_name")
+    if client is not None:
+        _reject_injection(client, "client")
     cmd = f'run job="{job_name}"'
     if level:
         cmd += f" level={level}"
@@ -302,7 +335,7 @@ def run_job(job_name: str, level: Optional[str] = None, client: Optional[str] = 
 
 
 @mcp.tool()
-def purge_volume(volume_name: str) -> str:
+def purge_volume(volume_name: str, confirm: bool = False) -> str:
     """Purge all job records for a volume from the Bacula catalog.
 
     Marks the volume as Purged so Bacula can recycle it. Does not delete
@@ -310,7 +343,10 @@ def purge_volume(volume_name: str) -> str:
 
     Args:
         volume_name: Volume name (e.g. "Plastic-Full-0781")
+        confirm: Must be true to purge. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"purge_volume({volume_name!r})")
+    _reject_injection(volume_name, "volume_name")
     stdout, stderr = _run([f"purge volume={volume_name}"])
     if not stdout:
         return f"Error: {stderr[:200]}"
@@ -331,6 +367,7 @@ def prune_client(client_name: str) -> dict:
     Args:
         client_name: Bacula client name (e.g. "SteamHV1")
     """
+    _reject_injection(client_name, "client_name")
     commands = [
         f"prune jobs client={client_name} yes",
         f"prune files client={client_name} yes",
@@ -358,13 +395,17 @@ def prune_client(client_name: str) -> dict:
 
 
 @mcp.tool()
-def prune_all() -> dict:
+def prune_all(confirm: bool = False) -> dict:
     """Prune expired records for all clients and volumes.
 
     Sweeps the full catalog — jobs, files, and volumes — removing anything
     past its retention period. Equivalent to running the weekly maintenance
     job manually. Safe to run at any time; does not touch physical files.
+
+    Args:
+        confirm: Must be true to run. Ask the user for permission first.
     """
+    _require_confirm(confirm, "prune_all()")
     # Get client list from catalog
     stdout, stderr = _run(["list clients"], timeout=30)
     client_names = re.findall(r"\|\s*(\S+-fd|\S+)\s*\|", stdout)
@@ -472,16 +513,38 @@ def dbcheck() -> dict:
     }
 
 
+# console() is a read-only escape hatch — only bconsole verbs that query state,
+# never ones that mutate the catalog, storage, or run jobs. Mutating actions
+# have dedicated tools above with confirm gates; this allowlist keeps console()
+# from becoming a way to bypass those gates (e.g. "purge volume=...", "run job=...").
+_CONSOLE_ALLOWED_VERBS = {
+    "status", "list", "llist", "show", "help", "version", ".api",
+    "messages", "query", "estimate",
+}
+
+
 @mcp.tool()
 def console(command: str) -> str:
-    """Run a raw bconsole command and return output.
+    """Run a raw, read-only bconsole command and return output.
 
-    Escape hatch for commands not covered by other tools. Output is
-    returned as plain text. Avoid commands that require interactive input.
+    Escape hatch for read-only queries not covered by other tools (status,
+    list, llist, show, help, version, messages, query, estimate). Mutating
+    commands (run, purge, prune, cancel, delete, label, mount, sql, etc.) are
+    rejected — use the dedicated tool for that action instead, which enforces
+    a confirmation gate.
 
     Args:
         command: bconsole command string (e.g. "list volumes pool=Plastic-Full-Pool")
     """
+    _reject_injection(command, "command")
+    verb = command.strip().split(None, 1)[0].lower() if command.strip() else ""
+    if verb not in _CONSOLE_ALLOWED_VERBS:
+        raise ValueError(
+            f"SECURITY: console() only allows read-only verbs {sorted(_CONSOLE_ALLOWED_VERBS)}. "
+            f"'{verb}' is not permitted here. If this is a mutating action, use its "
+            "dedicated tool (run_job, purge_volume, prune_client, prune_all, cancel_job), "
+            "which requires explicit confirmation."
+        )
     stdout, stderr = _run([command], timeout=60)
     if not stdout:
         return f"Error: {stderr[:200]}"

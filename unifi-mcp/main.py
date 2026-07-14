@@ -1,5 +1,6 @@
 """UniFi local controller MCP server — X-API-KEY auth for UCG/UDM (UniFi OS 3+)."""
 
+import ipaddress
 import os
 import re
 from typing import Any
@@ -38,6 +39,42 @@ def _safe_id(value: str, name: str = "id") -> str:
     if not _ID_RE.match(value):
         raise ValueError(f"Invalid {name} format: must be a 24-character hex string")
     return value
+
+
+def _require_confirm(confirm: bool, action: str) -> None:
+    """Block a mutating/destructive tool call unless the caller explicitly confirmed it.
+
+    Raised as a ValueError (not silently returned) so it surfaces to the model
+    as a tool error it must relay to the user, matching FastMCP's error convention.
+    """
+    if not confirm:
+        raise ValueError(
+            f"SECURITY: {action} was not run. This changes live network configuration. "
+            "Ask the user for explicit permission, then call again with confirm=true."
+        )
+
+
+_PORT_RE = re.compile(r"^\d{1,5}(-\d{1,5})?$")
+
+
+def _validate_port_spec(value: str, name: str) -> None:
+    if not _PORT_RE.match(value):
+        raise ValueError(f"Invalid {name}: must be a port (e.g. '8080') or range (e.g. '8000-8090')")
+    for p in value.split("-"):
+        if not (0 < int(p) < 65536):
+            raise ValueError(f"Invalid {name}: port {p} out of range (1-65535)")
+
+
+def _validate_private_ipv4(value: str, name: str) -> None:
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError as e:
+        raise ValueError(f"Invalid {name}: not a valid IP address") from e
+    if not addr.is_private or addr.is_loopback or addr.is_link_local:
+        raise ValueError(
+            f"Invalid {name}: '{value}' is not a private LAN address. Port forwards must "
+            "target an RFC1918 address on your local network."
+        )
 
 
 async def _get_site_id() -> str:
@@ -229,6 +266,7 @@ async def update_firewall_policy(
     logging: bool | None = None,
     protocol: str | None = None,
     ip_version: str | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Update an existing firewall policy by its _id.
 
@@ -243,7 +281,9 @@ async def update_firewall_policy(
         logging: Enable or disable logging for matched traffic.
         protocol: Protocol to match — "all", "tcp", "udp", "tcp_udp", "icmp", "icmpv6".
         ip_version: "IPV4", "IPV6", or "BOTH".
+        confirm: Must be true to apply the change. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"update_firewall_policy({policy_id})")
     _safe_id(policy_id, "policy_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
@@ -285,6 +325,7 @@ async def create_firewall_policy(
     logging: bool = False,
     create_allow_respond: bool = True,
     connection_state_type: str = "ALL",
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Create a new firewall policy (zone-based rule, UniFi OS 3+ / UCG).
 
@@ -312,7 +353,9 @@ async def create_firewall_policy(
         create_allow_respond: For ALLOW rules, also auto-create the reverse RESPOND_ONLY rule so
             return traffic isn't separately blocked (default True — matches UniFi UI default).
         connection_state_type: "ALL", "NEW", "ESTABLISHED", "RESPOND_ONLY", or "CUSTOM" (default "ALL").
+        confirm: Must be true to create the rule. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"create_firewall_policy({name!r})")
     _safe_id(src_zone_id, "src_zone_id")
     _safe_id(dst_zone_id, "dst_zone_id")
     for nid in (src_network_ids or []) + (dst_network_ids or []):
@@ -470,6 +513,7 @@ async def update_port_forward(
     fwd_port: str | None = None,
     src: str | None = None,
     log: bool | None = None,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Update an existing port forward rule by its _id.
 
@@ -486,8 +530,16 @@ async def update_port_forward(
         fwd_port: Port or range on the LAN destination (e.g. "80", "8000-8080").
         src: Source IP restriction — "any" or a specific IP/CIDR.
         log: Enable or disable logging for this rule.
+        confirm: Must be true to apply the change. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"update_port_forward({port_forward_id})")
     _safe_id(port_forward_id, "port_forward_id")
+    if dst_port is not None:
+        _validate_port_spec(dst_port, "dst_port")
+    if fwd_port is not None:
+        _validate_port_spec(fwd_port, "fwd_port")
+    if fwd is not None:
+        _validate_private_ipv4(fwd, "fwd")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers())
         r.raise_for_status()
@@ -719,19 +771,35 @@ async def create_port_forward(
     src: str = "any",
     enabled: bool = True,
     log: bool = False,
+    allow_any_src: bool = False,
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Create a new port forward (WAN → LAN NAT) rule.
 
     Args:
         name: Display name for the rule.
-        fwd: LAN IP address to forward traffic to.
+        fwd: LAN IP address to forward traffic to. Must be a private (RFC1918) address.
         dst_port: WAN-side port or range to listen on (e.g. "8080", "8000-8090").
         fwd_port: LAN-side port or range to forward to (e.g. "80", "8000-8090").
         proto: Protocol — "tcp", "udp", or "tcp_udp" (default "tcp").
         src: Source IP restriction — "any" or a specific IP/CIDR (default "any").
         enabled: Whether the rule is active (default True).
         log: Enable logging for this rule (default False).
+        allow_any_src: Must be true to create a rule with src="any" — this exposes the
+            forwarded port to the entire internet. Defaults to false; scope src to a
+            specific IP/CIDR whenever possible.
+        confirm: Must be true to create the rule. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"create_port_forward({name!r})")
+    _validate_port_spec(dst_port, "dst_port")
+    _validate_port_spec(fwd_port, "fwd_port")
+    _validate_private_ipv4(fwd, "fwd")
+    if src == "any" and not allow_any_src:
+        raise ValueError(
+            "SECURITY: src='any' exposes this forwarded port to the entire internet. "
+            "Scope 'src' to a specific IP/CIDR, or pass allow_any_src=true if this is "
+            "intentional and the user has approved it."
+        )
     payload: dict[str, Any] = {
         "pfwd_interface": "wan",
         "name": name,
@@ -764,11 +832,16 @@ async def create_port_forward(
 
 
 @mcp.tool()
-async def delete_port_forward(port_forward_id: str) -> dict[str, Any]:
+async def delete_port_forward(port_forward_id: str, confirm: bool = False) -> dict[str, Any]:
     """Delete a port forward rule by its _id.
 
     Use list_port_forwards to find the _id before calling this. This is permanent.
+
+    Args:
+        port_forward_id: The _id of the port forward rule to delete.
+        confirm: Must be true to delete. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"delete_port_forward({port_forward_id})")
     _safe_id(port_forward_id, "port_forward_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.delete(_api(f"/rest/portforward/{port_forward_id}"), headers=_headers())
@@ -784,6 +857,8 @@ async def update_wlan(
     passphrase: str | None = None,
     security: str | None = None,
     vlan: int | None = None,
+    confirm: bool = False,
+    allow_open_security: bool = False,
 ) -> dict[str, Any]:
     """Update a WiFi network (SSID) configuration by its _id.
 
@@ -796,7 +871,17 @@ async def update_wlan(
         passphrase: WiFi password (WPA-PSK networks only).
         security: Security mode — "wpapsk" (WPA2), "wpa3" (WPA3), "open".
         vlan: VLAN ID to tag traffic onto (0 or None for untagged).
+        confirm: Must be true to apply the change. Ask the user for permission first.
+        allow_open_security: Must ALSO be true when security="open" — this removes all
+            WiFi encryption, letting anyone in range join and see other clients' traffic.
     """
+    _require_confirm(confirm, f"update_wlan({wlan_id})")
+    if security is not None and security.lower() == "open" and not allow_open_security:
+        raise ValueError(
+            "SECURITY: security='open' disables all WiFi encryption on this SSID. Ask "
+            "the user for explicit approval of this specific downgrade, then call again "
+            "with allow_open_security=true."
+        )
     _safe_id(wlan_id, "wlan_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers())
@@ -830,6 +915,7 @@ async def update_wlan(
 async def update_firewall_group(
     group_id: str,
     members: list[str],
+    confirm: bool = False,
 ) -> dict[str, Any]:
     """Replace the members of a firewall address group by its _id.
 
@@ -839,7 +925,9 @@ async def update_firewall_group(
     Args:
         group_id: The _id of the firewall group to update.
         members: Complete list of IP addresses or CIDRs for the group.
+        confirm: Must be true to apply the change. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"update_firewall_group({group_id})")
     _safe_id(group_id, "group_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/firewallgroup/{group_id}"), headers=_headers())
@@ -858,12 +946,17 @@ async def update_firewall_group(
 
 
 @mcp.tool()
-async def block_client(mac: str) -> dict[str, Any]:
+async def block_client(mac: str, confirm: bool = False) -> dict[str, Any]:
     """Block a client device from the network by MAC address.
 
     The device will be disconnected and prevented from reconnecting until unblocked.
     Use unblock_client to reverse this.
+
+    Args:
+        mac: MAC address of the client to block.
+        confirm: Must be true to block. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"block_client({mac})")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.post(
             _api("/cmd/stamgr"),
@@ -888,12 +981,17 @@ async def unblock_client(mac: str) -> dict[str, Any]:
 
 
 @mcp.tool()
-async def restart_device(mac: str) -> dict[str, Any]:
+async def restart_device(mac: str, confirm: bool = False) -> dict[str, Any]:
     """Reboot a UniFi device (AP, switch, or gateway) by its MAC address.
 
     The device will be temporarily offline during restart (typically 30-90 seconds).
     Use get_device_stats to find the MAC address of the device to restart.
+
+    Args:
+        mac: MAC address of the device to restart.
+        confirm: Must be true to restart. Ask the user for permission first.
     """
+    _require_confirm(confirm, f"restart_device({mac})")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.post(
             _api("/cmd/devmgr"),
