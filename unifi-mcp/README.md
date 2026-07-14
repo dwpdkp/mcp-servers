@@ -119,7 +119,7 @@ Two tools have a second, narrower gate on top of `confirm` for a specific danger
 `create_port_forward` and `update_port_forward` validate two additional fields before any request is sent:
 
 - `fwd` (the internal target) must be a private, non-loopback, non-link-local IPv4 address (RFC1918); a public IP here would misconfigure the forward.
-- `dst_port` / `fwd_port` must be a single port or a `start-end` range, each in 1–65535.
+- `dst_port` / `fwd_port` must be a single port or a `start-end` range, each in 1-65535.
 
 Invalid values raise a `ValueError` naming the offending field.
 
@@ -135,7 +135,7 @@ Tools not listed above (`list_*`, `get_*`, `add_dhcp_reservation`, `remove_dhcp_
 - `update_firewall_group` replaces the entire member list; fetch current members with `list_firewall_groups` first and include all IPs you want to keep.
 - Event/alarm log endpoints return 404 on current UCG firmware; not supported via this API path.
 - Bandwidth report endpoints (`/stat/report/hourly.site`) respond 200 but return only stub data; not implemented.
-- `restart_device` takes effect immediately and causes a device outage of approximately 30–90 seconds. Restarting an AP disconnects all wireless clients on that AP.
+- `restart_device` takes effect immediately and causes a device outage of approximately 30-90 seconds. Restarting an AP disconnects all wireless clients on that AP.
 - There is no dedicated firewall-zone-listing endpoint (`/v2/api/site/{site}/firewall/zones` and similar paths all 404 on UCG Ultra 5.1.19). Zone names are rendered client-side in the UI from a static list and aren't fetchable via API. To check whether two networks share a zone (and therefore share the same intra-zone allow/deny default), compare `firewall_zone_id` from `list_networks`; matching IDs mean matching zones, even without a human-readable name.
 
 ---
