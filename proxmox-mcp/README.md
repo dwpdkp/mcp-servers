@@ -73,6 +73,7 @@ python -m proxmox_mcp
 | `PROXMOX_TOKEN_NAME` | API token ID (e.g., `root@pam!mcp-token`) | — |
 | `PROXMOX_TOKEN_VALUE` | API token secret | — |
 | `PROXMOX_VERIFY_SSL` | Verify SSL certificates | `true` |
+| `PROXMOX_ALLOW_INSECURE_TLS` | Second, explicit opt-in required to actually disable TLS verification when `PROXMOX_VERIFY_SSL=false` — without it, the server fails closed at startup with a fatal error rather than silently connecting insecurely | `false` |
 | `PROXMOX_ALLOW_DANGER` | Enable critical/destructive tools like `delete_instance` | `false` |
 
 ---
@@ -130,6 +131,10 @@ Every Proxmox API response is validated against Pydantic schemas. If the Proxmox
 ### Input Sanitization
 
 All identifiers (node names, storage names, snapshot names) are validated against strict patterns. VMIDs must be positive integers. Shell commands are parsed through `shlex` to prevent injection.
+
+### TLS Verification (fail-closed)
+
+Setting `PROXMOX_VERIFY_SSL=false` alone is not enough to disable certificate verification. The server also requires `PROXMOX_ALLOW_INSECURE_TLS=true` as a second, explicit opt-in; without it, startup fails with a fatal error explaining the risk (MITM exposure) rather than silently connecting insecurely. This prevents a copy-pasted or misremembered `.env` from quietly downgrading transport security.
 
 ---
 
@@ -201,3 +206,11 @@ All tests run fully offline — Proxmox API calls are mocked at the HTTP layer.
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
+
+---
+
+## Document History
+
+| Date | Author | Changes |
+|------|--------|---------|
+| 2026-07-14 | Doug Pearson | Documented `PROXMOX_ALLOW_INSECURE_TLS` fail-closed TLS gate and critical-tier `delete_instance` dual-flag confirmation |
