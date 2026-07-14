@@ -14,24 +14,24 @@ An MCP (Model Context Protocol) server for managing Proxmox VE infrastructure th
 ## Features
 
 ### Discovery
-- **`list_nodes`** — Cluster node overview
-- **`list_vms`** / **`list_lxc_containers`** — Instance inventory per node
-- **`list_storage`** / **`list_storage_content`** — Storage pools, ISOs, and templates
-- **`get_instance_config`** — Full guest configuration
-- **`get_lxc_interfaces`** — Container network interfaces
-- **`get_resource_usage`** — Performance metrics (CPU, memory, network, disk)
+- **`list_nodes`**: Cluster node overview
+- **`list_vms`** / **`list_lxc_containers`**: Instance inventory per node
+- **`list_storage`** / **`list_storage_content`**: Storage pools, ISOs, and templates
+- **`get_instance_config`**: Full guest configuration
+- **`get_lxc_interfaces`**: Container network interfaces
+- **`get_resource_usage`**: Performance metrics (CPU, memory, network, disk)
 
 ### Management
-- **`power_control`** — Start, stop, shutdown, reboot VMs and containers
-- **`create_lxc`** / **`create_vm`** — Provision new infrastructure
-- **`execute_lxc_command`** — Run shell commands inside containers
-- **`set_vm_cloudinit`** — Configure cloud-init (user, SSH keys, network)
+- **`power_control`**: Start, stop, shutdown, reboot VMs and containers
+- **`create_lxc`** / **`create_vm`**: Provision new infrastructure
+- **`execute_lxc_command`**: Run shell commands inside containers
+- **`set_vm_cloudinit`**: Configure cloud-init (user, SSH keys, network)
 
 ### Protection
-- **`create_snapshot`** / **`rollback_snapshot`** / **`list_snapshots`** — Snapshot management
-- **`delete_instance`** — Permanently delete a VM or container (disabled by default, requires double confirmation)
-- **`get_task_status`** / **`get_task_log`** — Monitor background operations
-- **`get_mcp_logs`** — Server-side log inspection
+- **`create_snapshot`** / **`rollback_snapshot`** / **`list_snapshots`**: Snapshot management
+- **`delete_instance`**: Permanently delete a VM or container (disabled by default, requires double confirmation)
+- **`get_task_status`** / **`get_task_log`**: Monitor background operations
+- **`get_mcp_logs`**: Server-side log inspection
 
 ---
 
@@ -69,11 +69,11 @@ python -m proxmox_mcp
 
 | Variable | Description | Default |
 |---|---|---|
-| `PROXMOX_URL` | Proxmox API base URL (e.g., `https://192.168.1.100:8006/api2/json`) | — |
-| `PROXMOX_TOKEN_NAME` | API token ID (e.g., `root@pam!mcp-token`) | — |
-| `PROXMOX_TOKEN_VALUE` | API token secret | — |
+| `PROXMOX_URL` | Proxmox API base URL (e.g., `https://192.168.1.100:8006/api2/json`) | n/a |
+| `PROXMOX_TOKEN_NAME` | API token ID (e.g., `root@pam!mcp-token`) | n/a |
+| `PROXMOX_TOKEN_VALUE` | API token secret | n/a |
 | `PROXMOX_VERIFY_SSL` | Verify SSL certificates | `true` |
-| `PROXMOX_ALLOW_INSECURE_TLS` | Second, explicit opt-in required to actually disable TLS verification when `PROXMOX_VERIFY_SSL=false` — without it, the server fails closed at startup with a fatal error rather than silently connecting insecurely | `false` |
+| `PROXMOX_ALLOW_INSECURE_TLS` | Second, explicit opt-in required to actually disable TLS verification when `PROXMOX_VERIFY_SSL=false`; without it, the server fails closed at startup with a fatal error rather than silently connecting insecurely | `false` |
 | `PROXMOX_ALLOW_DANGER` | Enable critical/destructive tools like `delete_instance` | `false` |
 
 ---
@@ -184,16 +184,16 @@ pip install -e ".[dev]"    # Install with test dependencies
 pytest -v                  # Run all 152 tests (no Proxmox needed)
 ```
 
-All tests run fully offline — Proxmox API calls are mocked at the HTTP layer.
+All tests run fully offline. Proxmox API calls are mocked at the HTTP layer.
 
 ## Tech Stack
 
 - **Python 3.10+**
-- **MCP SDK** (`mcp`) — FastMCP server framework
-- **Pydantic** — Response validation and contract enforcement
-- **httpx** — Async HTTP client
-- **pytest** + **pytest-httpx** — Testing with HTTP mocking
-- **Transport** — stdio (JSON-RPC)
+- **MCP SDK** (`mcp`): FastMCP server framework
+- **Pydantic**: Response validation and contract enforcement
+- **httpx**: Async HTTP client
+- **pytest** + **pytest-httpx**: Testing with HTTP mocking
+- **Transport**: stdio (JSON-RPC)
 
 ---
 
