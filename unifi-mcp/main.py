@@ -979,7 +979,7 @@ async def update_wlan(
     enabled: bool | None = None,
     passphrase: str | None = None,
     security: str | None = None,
-    vlan: int | None = None,
+    networkconf_id: str | None = None,
     confirm: bool = False,
     allow_open_security: bool = False,
 ) -> dict[str, Any]:
@@ -987,13 +987,24 @@ async def update_wlan(
 
     Use list_wlans to find the _id and current values first. Only provided fields are changed.
 
+    IMPORTANT: this controller binds an SSID to a VLAN via `networkconf_id` (pointing at a
+    network object from list_networks), NOT a raw VLAN-tag integer — there is no `vlan` field
+    on this site's wlanconf objects (confirmed via a live GET). To move an SSID onto a
+    different VLAN, pass networkconf_id set to the target network's _id from list_networks.
+
+    Changing networkconf_id on an SSID that has active clients will disconnect and
+    reconnect ALL of them (including whatever device you're using right now, if it's on
+    this SSID) as they renew DHCP on the new subnet — typically seconds, but a real gap.
+    Confirm the user is ready for that before calling this with a new networkconf_id.
+
     Args:
         wlan_id: The _id of the WLAN to update.
         name: SSID name (the network name clients see).
         enabled: Enable or disable the SSID.
         passphrase: WiFi password (WPA-PSK networks only).
         security: Security mode — "wpapsk" (WPA2), "wpa3" (WPA3), "open".
-        vlan: VLAN ID to tag traffic onto (0 or None for untagged).
+        networkconf_id: The _id (from list_networks) of the network this SSID should bind to.
+            This is what actually determines the SSID's VLAN.
         confirm: Must be true to apply the change. Ask the user for permission first.
         allow_open_security: Must ALSO be true when security="open" — this removes all
             WiFi encryption, letting anyone in range join and see other clients' traffic.
@@ -1006,6 +1017,8 @@ async def update_wlan(
             "with allow_open_security=true."
         )
     _safe_id(wlan_id, "wlan_id")
+    if networkconf_id is not None:
+        _safe_id(networkconf_id, "networkconf_id")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers())
         r.raise_for_status()
@@ -1019,9 +1032,8 @@ async def update_wlan(
             wlan["x_passphrase"] = passphrase
         if security is not None:
             wlan["security"] = security
-        if vlan is not None:
-            wlan["vlan"] = vlan
-            wlan["vlan_enabled"] = vlan > 0
+        if networkconf_id is not None:
+            wlan["networkconf_id"] = networkconf_id
 
         r2 = await c.put(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers(), json=wlan)
         r2.raise_for_status()
@@ -1030,7 +1042,7 @@ async def update_wlan(
         "name": wlan.get("name"),
         "enabled": wlan.get("enabled"),
         "security": wlan.get("security"),
-        "vlan": wlan.get("vlan"),
+        "networkconf_id": wlan.get("networkconf_id"),
     }
 
 
