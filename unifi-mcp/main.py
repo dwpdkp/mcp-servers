@@ -65,6 +65,13 @@ def _validate_port_spec(value: str, name: str) -> None:
             raise ValueError(f"Invalid {name}: port {p} out of range (1-65535)")
 
 
+def _validate_ip_or_cidr(value: str, name: str) -> None:
+    try:
+        ipaddress.ip_network(value, strict=False)
+    except ValueError as e:
+        raise ValueError(f"Invalid {name}: '{value}' is not a valid IP address or CIDR") from e
+
+
 def _validate_private_ipv4(value: str, name: str) -> None:
     try:
         addr = ipaddress.ip_address(value)
@@ -317,6 +324,8 @@ async def create_firewall_policy(
     dst_zone_id: str,
     src_network_ids: list[str] | None = None,
     dst_network_ids: list[str] | None = None,
+    src_ips: list[str] | None = None,
+    dst_ips: list[str] | None = None,
     src_target: str = "NETWORK",
     dst_target: str = "NETWORK",
     protocol: str = "all",
@@ -337,6 +346,11 @@ async def create_firewall_policy(
     dst_zone_id will be identical — same-zone traffic between networks in a zone-based firewall is
     deny-by-default unless punched through with an explicit rule like this.
 
+    To scope a rule to specific hosts rather than a whole network (e.g. "allow IoT to reach
+    just the two Pi-hole servers, not all of Default"), set src_target/dst_target="IP" and
+    pass src_ips/dst_ips — this is narrower than a NETWORK-target rule and doesn't require a
+    port range.
+
     Args:
         name: Display name for the rule.
         action: "ALLOW" or "BLOCK".
@@ -344,6 +358,8 @@ async def create_firewall_policy(
         dst_zone_id: Firewall zone _id for the destination side.
         src_network_ids: List of network _ids to match as source (used when src_target="NETWORK").
         dst_network_ids: List of network _ids to match as destination (used when dst_target="NETWORK").
+        src_ips: List of IP addresses or CIDRs to match as source (used when src_target="IP").
+        dst_ips: List of IP addresses or CIDRs to match as destination (used when dst_target="IP").
         src_target: "NETWORK", "IP", or "ANY" (default "NETWORK").
         dst_target: "NETWORK", "IP", or "ANY" (default "NETWORK").
         protocol: "all", "tcp", "udp", "tcp_udp", "icmp", "icmpv6" (default "all").
@@ -360,6 +376,8 @@ async def create_firewall_policy(
     _safe_id(dst_zone_id, "dst_zone_id")
     for nid in (src_network_ids or []) + (dst_network_ids or []):
         _safe_id(nid, "network_id")
+    for ip in (src_ips or []) + (dst_ips or []):
+        _validate_ip_or_cidr(ip, "ip")
     if action.upper() not in ("ALLOW", "BLOCK"):
         raise ValueError("action must be 'ALLOW' or 'BLOCK'")
 
@@ -384,6 +402,7 @@ async def create_firewall_policy(
             "zone_id": src_zone_id,
             "matching_target": src_target.upper(),
             "network_ids": src_network_ids or [],
+            "ips": src_ips or [],
             "match_mac": False,
             "match_opposite_networks": False,
             "match_opposite_ports": False,
@@ -393,6 +412,7 @@ async def create_firewall_policy(
             "zone_id": dst_zone_id,
             "matching_target": dst_target.upper(),
             "network_ids": dst_network_ids or [],
+            "ips": dst_ips or [],
             "match_opposite_networks": False,
             "match_opposite_ports": False,
             "port_matching_type": "ANY",
