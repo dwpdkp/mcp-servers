@@ -407,6 +407,7 @@ async def create_firewall_policy(
             "match_opposite_networks": False,
             "match_opposite_ports": False,
             "port_matching_type": "ANY",
+            **({"matching_target_type": "SPECIFIC", "match_opposite_ips": False} if src_target.upper() == "IP" else {}),
         },
         "destination": {
             "zone_id": dst_zone_id,
@@ -416,6 +417,7 @@ async def create_firewall_policy(
             "match_opposite_networks": False,
             "match_opposite_ports": False,
             "port_matching_type": "ANY",
+            **({"matching_target_type": "SPECIFIC", "match_opposite_ips": False} if dst_target.upper() == "IP" else {}),
         },
     }
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
