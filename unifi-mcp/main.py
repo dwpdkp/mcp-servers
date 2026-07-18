@@ -160,9 +160,9 @@ async def add_dhcp_reservation(mac: str, ip: str, name: str = "") -> dict[str, A
     """Add or update a DHCP reservation (fixed IP) for a client by MAC address."""
     mac = mac.lower()
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
-        r = await c.get(_api("/rest/user"), headers=_headers(), params={"mac": mac})
+        r = await c.get(_api("/rest/user"), headers=_headers())
         r.raise_for_status()
-        users = r.json().get("data", [])
+        users = [u for u in r.json().get("data", []) if u.get("mac", "").lower() == mac]
         payload: dict[str, Any] = {"use_fixedip": True, "fixed_ip": ip}
         if name:
             payload["name"] = name
@@ -182,9 +182,9 @@ async def remove_dhcp_reservation(mac: str) -> dict[str, Any]:
     """Remove a DHCP reservation for a client by MAC address."""
     mac = mac.lower()
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
-        r = await c.get(_api("/rest/user"), headers=_headers(), params={"mac": mac})
+        r = await c.get(_api("/rest/user"), headers=_headers())
         r.raise_for_status()
-        users = r.json().get("data", [])
+        users = [u for u in r.json().get("data", []) if u.get("mac", "").lower() == mac]
         if not users:
             return {"status": "not_found", "mac": mac}
         user_id = users[0]["_id"]
