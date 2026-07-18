@@ -581,6 +581,118 @@ async def update_port_forward(
 
 
 @mcp.tool()
+async def list_firewall_zones() -> list[dict[str, Any]]:
+    """List firewall zones (UniFi OS 3+ / UCG zone-based firewall).
+
+    Zones group networks into trust boundaries. Use this to find a zone's _id before
+    creating rules with create_firewall_policy or moving a network with update_network_zone.
+    """
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_v2("/firewall/zone"), headers=_headers())
+        r.raise_for_status()
+    zones = r.json() if isinstance(r.json(), list) else r.json().get("data", [])
+    return [
+        {
+            "_id": z.get("_id"),
+            "name": z.get("name"),
+            "zone_key": z.get("zone_key"),
+            "default_zone": z.get("default_zone", False),
+            "network_ids": z.get("network_ids", []),
+        }
+        for z in zones
+    ]
+
+
+@mcp.tool()
+async def create_firewall_zone(name: str, confirm: bool = False) -> dict[str, Any]:
+    """Create a new, empty firewall zone.
+
+    The zone starts with no member networks — use update_network_zone to move a network
+    into it afterward. Building rules against an empty zone first (before moving any live
+    network into it) lets you stage a ruleset with zero blast radius.
+
+    Args:
+        name: Display name for the zone.
+        confirm: Must be true to create the zone. Ask the user for permission first.
+    """
+    _require_confirm(confirm, f"create_firewall_zone({name!r})")
+    payload = {"name": name, "network_ids": []}
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.post(_v2("/firewall/zone"), headers=_headers(), json=payload)
+        r.raise_for_status()
+        created = r.json()
+    if isinstance(created, list):
+        # Some UniFi endpoints return the full updated collection on write; find our zone by name.
+        matches = [z for z in created if z.get("name") == name]
+        created = matches[-1] if matches else (created[-1] if created else {})
+    return {
+        "_id": created.get("_id"),
+        "name": created.get("name"),
+        "zone_key": created.get("zone_key"),
+        "network_ids": created.get("network_ids", []),
+    }
+
+
+@mcp.tool()
+async def update_network_zone(network_id: str, firewall_zone_id: str, confirm: bool = False) -> dict[str, Any]:
+    """Move a network to a different firewall zone.
+
+    Zone membership is stored on both sides in UniFi's data model — the network's
+    firewall_zone_id field, and the zone's network_ids list. This tool updates both in the
+    same call to avoid leaving them inconsistent: the network's firewall_zone_id is changed,
+    the network_id is removed from its old zone's network_ids, and appended to the new zone's
+    network_ids.
+
+    Use list_networks to find network_id and its current firewall_zone_id, and
+    list_firewall_zones to find the target firewall_zone_id, before calling this.
+
+    Args:
+        network_id: The _id of the network (from list_networks) to move.
+        firewall_zone_id: The _id of the destination zone (from list_firewall_zones).
+        confirm: Must be true to apply the change. Ask the user for permission first.
+    """
+    _require_confirm(confirm, f"update_network_zone({network_id} -> {firewall_zone_id})")
+    _safe_id(network_id, "network_id")
+    _safe_id(firewall_zone_id, "firewall_zone_id")
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_api(f"/rest/networkconf/{network_id}"), headers=_headers())
+        r.raise_for_status()
+        network = r.json().get("data", [{}])[0]
+        old_zone_id = network.get("firewall_zone_id")
+
+        r2 = await c.get(_v2("/firewall/zone"), headers=_headers())
+        r2.raise_for_status()
+        zones = r2.json() if isinstance(r2.json(), list) else r2.json().get("data", [])
+        zones_by_id = {z["_id"]: z for z in zones}
+        if firewall_zone_id not in zones_by_id:
+            raise ValueError(f"No firewall zone found with _id {firewall_zone_id}")
+
+        network["firewall_zone_id"] = firewall_zone_id
+        r3 = await c.put(_api(f"/rest/networkconf/{network_id}"), headers=_headers(), json=network)
+        r3.raise_for_status()
+
+        if old_zone_id and old_zone_id in zones_by_id and old_zone_id != firewall_zone_id:
+            old_zone = zones_by_id[old_zone_id]
+            old_zone["network_ids"] = [n for n in old_zone.get("network_ids", []) if n != network_id]
+            r4 = await c.put(_v2(f"/firewall/zone/{old_zone_id}"), headers=_headers(), json=old_zone)
+            r4.raise_for_status()
+
+        new_zone = zones_by_id[firewall_zone_id]
+        if network_id not in new_zone.get("network_ids", []):
+            new_zone["network_ids"] = [*new_zone.get("network_ids", []), network_id]
+            r5 = await c.put(_v2(f"/firewall/zone/{firewall_zone_id}"), headers=_headers(), json=new_zone)
+            r5.raise_for_status()
+
+    return {
+        "network_id": network_id,
+        "network_name": network.get("name"),
+        "old_zone_id": old_zone_id,
+        "new_zone_id": firewall_zone_id,
+        "new_zone_name": zones_by_id[firewall_zone_id].get("name"),
+    }
+
+
+@mcp.tool()
 async def list_networks() -> list[dict[str, Any]]:
     """List all configured network segments (VLANs, subnets, purposes)."""
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
