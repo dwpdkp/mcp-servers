@@ -637,11 +637,12 @@ async def create_firewall_zone(name: str, confirm: bool = False) -> dict[str, An
 async def update_network_zone(network_id: str, firewall_zone_id: str, confirm: bool = False) -> dict[str, Any]:
     """Move a network to a different firewall zone.
 
-    Zone membership is stored on both sides in UniFi's data model — the network's
-    firewall_zone_id field, and the zone's network_ids list. This tool updates both in the
-    same call to avoid leaving them inconsistent: the network's firewall_zone_id is changed,
-    the network_id is removed from its old zone's network_ids, and appended to the new zone's
-    network_ids.
+    Zone membership is visible on both sides of UniFi's data model — the network's
+    firewall_zone_id field, and each zone's network_ids list — but only the network side
+    needs to be written. The controller auto-syncs both zones' network_ids server-side as a
+    result of this single PUT (confirmed empirically: manually PUTting the zone objects
+    afterward, which an earlier version of this tool did, gets rejected with 400, because the
+    zone documents have already changed server-side by the time that second PUT lands).
 
     Use list_networks to find network_id and its current firewall_zone_id, and
     list_firewall_zones to find the target firewall_zone_id, before calling this.
@@ -670,18 +671,6 @@ async def update_network_zone(network_id: str, firewall_zone_id: str, confirm: b
         network["firewall_zone_id"] = firewall_zone_id
         r3 = await c.put(_api(f"/rest/networkconf/{network_id}"), headers=_headers(), json=network)
         r3.raise_for_status()
-
-        if old_zone_id and old_zone_id in zones_by_id and old_zone_id != firewall_zone_id:
-            old_zone = zones_by_id[old_zone_id]
-            old_zone["network_ids"] = [n for n in old_zone.get("network_ids", []) if n != network_id]
-            r4 = await c.put(_v2(f"/firewall/zone/{old_zone_id}"), headers=_headers(), json=old_zone)
-            r4.raise_for_status()
-
-        new_zone = zones_by_id[firewall_zone_id]
-        if network_id not in new_zone.get("network_ids", []):
-            new_zone["network_ids"] = [*new_zone.get("network_ids", []), network_id]
-            r5 = await c.put(_v2(f"/firewall/zone/{firewall_zone_id}"), headers=_headers(), json=new_zone)
-            r5.raise_for_status()
 
     return {
         "network_id": network_id,
