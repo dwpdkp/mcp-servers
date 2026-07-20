@@ -1,17 +1,24 @@
 """UniFi local controller MCP server — X-API-KEY auth for UCG/UDM (UniFi OS 3+)."""
 
+import asyncio
 import ipaddress
 import os
 import re
 from typing import Any
 
 import httpx
+import paramiko
 from fastmcp import FastMCP
 
 UNIFI_URL = os.getenv("UNIFI_URL", "https://10.0.1.1")
 UNIFI_API_KEY = os.getenv("UNIFI_API_KEY", "")
 UNIFI_SITE = os.getenv("UNIFI_SITE", "default")
 VERIFY_SSL = os.getenv("UNIFI_VERIFY_SSL", "false").lower() == "true"
+
+# Console SSH — separate credential from UNIFI_API_KEY, see reference-unifi-gateway-ssh memory.
+UNIFI_SSH_HOST = os.getenv("UNIFI_SSH_HOST", "10.0.1.1")
+UNIFI_SSH_USER = os.getenv("UNIFI_SSH_USER", "root")
+UNIFI_SSH_PASSWORD = os.getenv("UNIFI_SSH_PASSWORD", "")
 
 mcp = FastMCP("UniFi")
 
@@ -219,6 +226,24 @@ async def list_wlans() -> list[dict[str, Any]]:
         }
         for d in data
     ]
+
+
+@mcp.tool()
+async def get_wlan_raw(wlan_id: str) -> dict[str, Any]:
+    """Get the full, unfiltered config for one WLAN by its _id.
+
+    list_wlans only returns a trimmed summary (name, security, vlan, etc). This
+    returns everything, including roaming/RF fields not otherwise exposed —
+    e.g. minimum RSSI kick thresholds (minrssi/minrssi_enabled per band),
+    fast roaming / 802.11r (fast_roaming_enabled), BSS transition (bss_transition),
+    band steering, and UAPSD. Use list_wlans first to find the _id.
+    """
+    _safe_id(wlan_id, "wlan_id")
+    async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
+        r = await c.get(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers())
+        r.raise_for_status()
+    data = r.json().get("data", [])
+    return data[0] if data else {}
 
 
 @mcp.tool()
@@ -874,6 +899,7 @@ async def get_device_stats() -> list[dict[str, Any]]:
                     "poe_enable": p.get("poe_enable"),
                     "tx_bytes": p.get("tx_bytes"),
                     "rx_bytes": p.get("rx_bytes"),
+                    "is_uplink": p.get("is_uplink"),
                 }
                 for p in d.get("port_table", [])
                 if p.get("port_idx") is not None
@@ -980,6 +1006,8 @@ async def update_wlan(
     passphrase: str | None = None,
     security: str | None = None,
     networkconf_id: str | None = None,
+    minrate_na_enabled: bool | None = None,
+    minrate_ng_enabled: bool | None = None,
     confirm: bool = False,
     allow_open_security: bool = False,
 ) -> dict[str, Any]:
@@ -1005,6 +1033,13 @@ async def update_wlan(
         security: Security mode — "wpapsk" (WPA2), "wpa3" (WPA3), "open".
         networkconf_id: The _id (from list_networks) of the network this SSID should bind to.
             This is what actually determines the SSID's VLAN.
+        minrate_na_enabled: Enable/disable the 5GHz minimum-data-rate kick — when enabled,
+            the AP forcibly disconnects any client whose signal degrades below the
+            configured floor (see get_wlan_raw for minrate_na_data_rate_kbps) instead of
+            just letting it run slower. Disabling this stops that forced-disconnect
+            behavior, which can otherwise look like Wi-Fi "flapping" for clients that
+            roam through a weak-signal spot with no roaming assistant to steer them.
+        minrate_ng_enabled: Same as minrate_na_enabled, but for the 2.4GHz band.
         confirm: Must be true to apply the change. Ask the user for permission first.
         allow_open_security: Must ALSO be true when security="open" — this removes all
             WiFi encryption, letting anyone in range join and see other clients' traffic.
@@ -1034,6 +1069,10 @@ async def update_wlan(
             wlan["security"] = security
         if networkconf_id is not None:
             wlan["networkconf_id"] = networkconf_id
+        if minrate_na_enabled is not None:
+            wlan["minrate_na_enabled"] = minrate_na_enabled
+        if minrate_ng_enabled is not None:
+            wlan["minrate_ng_enabled"] = minrate_ng_enabled
 
         r2 = await c.put(_api(f"/rest/wlanconf/{wlan_id}"), headers=_headers(), json=wlan)
         r2.raise_for_status()
@@ -1043,6 +1082,8 @@ async def update_wlan(
         "enabled": wlan.get("enabled"),
         "security": wlan.get("security"),
         "networkconf_id": wlan.get("networkconf_id"),
+        "minrate_na_enabled": wlan.get("minrate_na_enabled"),
+        "minrate_ng_enabled": wlan.get("minrate_ng_enabled"),
     }
 
 
@@ -1135,6 +1176,60 @@ async def restart_device(mac: str, confirm: bool = False) -> dict[str, Any]:
         )
         r.raise_for_status()
     return {"status": "restart_initiated", "mac": mac.lower()}
+
+
+# ── Gateway Console SSH ─────────────────────────────────────────────────────
+
+def _ssh_exec_sync(command: str, timeout: int) -> dict[str, Any]:
+    if not UNIFI_SSH_PASSWORD:
+        raise ValueError(
+            "UNIFI_SSH_PASSWORD is not set. Add UNIFI_SSH_HOST/UNIFI_SSH_USER/"
+            "UNIFI_SSH_PASSWORD to this server's env in .mcp.json (see the "
+            "unifi-gateway-ssh-console entry in enigma for credentials)."
+        )
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    try:
+        client.connect(
+            UNIFI_SSH_HOST,
+            username=UNIFI_SSH_USER,
+            password=UNIFI_SSH_PASSWORD,
+            timeout=10,
+            look_for_keys=False,
+            allow_agent=False,
+        )
+        stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+        out = stdout.read().decode(errors="replace")
+        err = stderr.read().decode(errors="replace")
+        exit_code = stdout.channel.recv_exit_status()
+    finally:
+        client.close()
+    return {"exit_code": exit_code, "stdout": out, "stderr": err}
+
+
+@mcp.tool()
+async def gateway_ssh_exec(command: str, timeout: int = 20, confirm: bool = False) -> dict[str, Any]:
+    """Run a shell command on the UniFi gateway itself via console SSH (root@UNIFI_SSH_HOST).
+
+    This is a SEPARATE credential/auth path from the X-API-KEY used by every other
+    tool in this server — it's the local console SSH account (plain password, no MFA),
+    distinct from the SSO/API login which has MFA enforced and can't be scripted.
+    See the reference-unifi-gateway-ssh memory for the full explanation.
+
+    Intended for read-only diagnostics this MCP server's other tools can't reach —
+    e.g. grepping /var/log/messages, checking daemon/process status, inspecting
+    raw config files. This runs an ARBITRARY shell command with root privileges on
+    live network infrastructure — treat it with the same care as any other
+    mutating tool, even for commands that are themselves read-only, since a typo
+    here has a much larger blast radius than a typo in a firewall-policy call.
+
+    Args:
+        command: Shell command to run on the gateway (runs as root).
+        timeout: Max seconds to wait for the command to finish (default 20).
+        confirm: Must be true to run. Ask the user for permission first.
+    """
+    _require_confirm(confirm, f"gateway_ssh_exec({command!r})")
+    return await asyncio.to_thread(_ssh_exec_sync, command, timeout)
 
 
 if __name__ == "__main__":
