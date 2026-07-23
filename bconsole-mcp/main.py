@@ -171,7 +171,7 @@ def _parse_status_director(output: str) -> dict:
                 })
 
         elif section == "running":
-            m = re.match(r"\s*(\d+)\s+(\S+)\s+(\S+)\s+([\d,]+)\s+([\d,.]+\s*[KMGTP]?)\s{2,}(.+)$", line)
+            m = re.match(r"\s*(\d+)\s+(\S+)\s+(\S+)\s+([\d,]+)\s+([\d,.]+\s*[KMGTP]?)\s+(.+)$", line)
             if m:
                 jobid = int(m.group(1))
                 files = int(m.group(4).replace(",", ""))
