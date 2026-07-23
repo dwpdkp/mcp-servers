@@ -8,11 +8,7 @@ import fastmcp
 from fastmcp import Client, FastMCP
 from fastmcp.utilities.inspect import (
     FastMCPInfo,
-    InspectFormat,
     ToolInfo,
-    format_fastmcp_info,
-    format_info,
-    format_mcp_info,
     inspect_fastmcp,
     inspect_fastmcp_v1,
 )
@@ -40,6 +36,8 @@ class TestFastMCPInfo:
             mcp_version="1.0.0",
             server_generation=2,
             version="1.0.0",
+            website_url=None,
+            icons=None,
             tools=[tool],
             prompts=[],
             resources=[],
@@ -66,6 +64,8 @@ class TestFastMCPInfo:
             mcp_version="1.0.0",
             server_generation=2,
             version="1.0.0",
+            website_url=None,
+            icons=None,
             tools=[],
             prompts=[],
             resources=[],
@@ -90,7 +90,7 @@ class TestGetFastMCPInfo:
         assert info.fastmcp_version == fastmcp.__version__
         assert info.mcp_version == importlib.metadata.version("mcp")
         assert info.server_generation == 2  # v2 server
-        assert info.version is None
+        assert info.version == fastmcp.__version__
         assert info.tools == []
         assert info.prompts == []
         assert info.resources == []
@@ -269,6 +269,198 @@ class TestGetFastMCPInfo:
             assert info.resources[0].uri == str(resources[0].uri)
             assert info.prompts[0].name == prompts[0].name
 
+    async def test_inspect_respects_tag_filtering(self):
+        """Test that inspect omits components filtered out by include_tags/exclude_tags.
+
+        Regression test for Issue #2032: inspect command was showing components
+        that were filtered out by tag rules, causing confusion when those
+        components weren't actually available to clients.
+        """
+        # Create server with include_tags that will filter out untagged components
+        mcp = FastMCP("FilteredServer")
+        mcp.enable(tags={"fetch", "analyze", "create"}, only=True)
+
+        # Add tools with and without matching tags
+        @mcp.tool(tags={"fetch"})
+        def tagged_tool() -> str:
+            """Tool with matching tag - should be visible."""
+            return "visible"
+
+        @mcp.tool
+        def untagged_tool() -> str:
+            """Tool without tags - should be filtered out."""
+            return "hidden"
+
+        # Add resources with and without matching tags
+        @mcp.resource("resource://tagged", tags={"analyze"})
+        def tagged_resource() -> str:
+            """Resource with matching tag - should be visible."""
+            return "visible resource"
+
+        @mcp.resource("resource://untagged")
+        def untagged_resource() -> str:
+            """Resource without tags - should be filtered out."""
+            return "hidden resource"
+
+        # Add templates with and without matching tags
+        @mcp.resource("resource://tagged/{id}", tags={"create"})
+        def tagged_template(id: str) -> str:
+            """Template with matching tag - should be visible."""
+            return f"visible template {id}"
+
+        @mcp.resource("resource://untagged/{id}")
+        def untagged_template(id: str) -> str:
+            """Template without tags - should be filtered out."""
+            return f"hidden template {id}"
+
+        # Add prompts with and without matching tags
+        @mcp.prompt(tags={"fetch"})
+        def tagged_prompt() -> list:
+            """Prompt with matching tag - should be visible."""
+            return [{"role": "user", "content": "visible prompt"}]
+
+        @mcp.prompt
+        def untagged_prompt() -> list:
+            """Prompt without tags - should be filtered out."""
+            return [{"role": "user", "content": "hidden prompt"}]
+
+        # Get inspect info
+        info = await inspect_fastmcp(mcp)
+
+        # Verify only tagged components are visible
+        assert len(info.tools) == 1
+        assert info.tools[0].name == "tagged_tool"
+
+        assert len(info.resources) == 1
+        assert info.resources[0].uri == "resource://tagged"
+
+        assert len(info.templates) == 1
+        assert info.templates[0].uri_template == "resource://tagged/{id}"
+
+        assert len(info.prompts) == 1
+        assert info.prompts[0].name == "tagged_prompt"
+
+        # Verify this matches what a client would see
+        async with Client(mcp) as client:
+            tools = await client.list_tools()
+            resources = await client.list_resources()
+            templates = await client.list_resource_templates()
+            prompts = await client.list_prompts()
+
+            assert len(info.tools) == len(tools)
+            assert len(info.resources) == len(resources)
+            assert len(info.templates) == len(templates)
+            assert len(info.prompts) == len(prompts)
+
+    async def test_inspect_respects_tag_filtering_with_mounted_servers(self):
+        """Test that inspect applies tag filtering to mounted servers.
+
+        Verifies that when a parent server has tag filters, those filters
+        are respected when inspecting components from mounted servers.
+        """
+        # Create a mounted server with various tagged and untagged components
+        mounted = FastMCP("MountedServer")
+
+        @mounted.tool(tags={"allowed"})
+        def allowed_tool() -> str:
+            return "allowed"
+
+        @mounted.tool(tags={"blocked"})
+        def blocked_tool() -> str:
+            return "blocked"
+
+        @mounted.tool
+        def untagged_tool() -> str:
+            return "untagged"
+
+        @mounted.resource("resource://allowed", tags={"allowed"})
+        def allowed_resource() -> str:
+            return "allowed resource"
+
+        @mounted.resource("resource://blocked", tags={"blocked"})
+        def blocked_resource() -> str:
+            return "blocked resource"
+
+        @mounted.prompt(tags={"allowed"})
+        def allowed_prompt() -> list:
+            return [{"role": "user", "content": "allowed"}]
+
+        @mounted.prompt(tags={"blocked"})
+        def blocked_prompt() -> list:
+            return [{"role": "user", "content": "blocked"}]
+
+        # Create parent server with tag filtering
+        parent = FastMCP("ParentServer")
+        parent.enable(tags={"allowed"}, only=True)
+        parent.mount(mounted)
+
+        # Get inspect info
+        info = await inspect_fastmcp(parent)
+
+        # Only components with "allowed" tag should be visible
+        tool_names = [t.name for t in info.tools]
+        assert "allowed_tool" in tool_names
+        assert "blocked_tool" not in tool_names
+        assert "untagged_tool" not in tool_names
+
+        resource_uris = [r.uri for r in info.resources]
+        assert "resource://allowed" in resource_uris
+        assert "resource://blocked" not in resource_uris
+
+        prompt_names = [p.name for p in info.prompts]
+        assert "allowed_prompt" in prompt_names
+        assert "blocked_prompt" not in prompt_names
+
+        # Verify this matches what a client would see
+        async with Client(parent) as client:
+            tools = await client.list_tools()
+            resources = await client.list_resources()
+            prompts = await client.list_prompts()
+
+            assert len(info.tools) == len(tools)
+            assert len(info.resources) == len(resources)
+            assert len(info.prompts) == len(prompts)
+
+    async def test_inspect_parent_filters_override_mounted_server_filters(self):
+        """Test that parent server tag filters apply to mounted servers.
+
+        Even if a mounted server has no tag filters of its own,
+        the parent server's filters should still apply.
+        """
+        # Create mounted server with NO tag filters (allows everything)
+        mounted = FastMCP("MountedServer")
+
+        @mounted.tool(tags={"production"})
+        def production_tool() -> str:
+            return "production"
+
+        @mounted.tool(tags={"development"})
+        def development_tool() -> str:
+            return "development"
+
+        @mounted.tool
+        def untagged_tool() -> str:
+            return "untagged"
+
+        # Create parent with exclude_tags - should filter mounted components
+        parent = FastMCP("ParentServer")
+        parent.disable(tags={"development"})
+        parent.mount(mounted)
+
+        # Get inspect info
+        info = await inspect_fastmcp(parent)
+
+        # Only production and untagged should be visible
+        tool_names = [t.name for t in info.tools]
+        assert "production_tool" in tool_names
+        assert "untagged_tool" in tool_names
+        assert "development_tool" not in tool_names
+
+        # Verify this matches what a client would see
+        async with Client(parent) as client:
+            tools = await client.list_tools()
+            assert len(info.tools) == len(tools)
+
 
 class TestFastMCP1xCompatibility:
     """Tests for FastMCP 1.x compatibility."""
@@ -405,188 +597,8 @@ class TestFastMCP1xCompatibility:
         assert info1x.server_generation == 1  # v1
         assert info2x.server_generation == 2  # v2
         assert info1x.version is None
-        assert info2x.version is None
+        assert info2x.version == fastmcp.__version__
 
         # No templates added in these tests
         assert len(info1x.templates) == 0
         assert len(info2x.templates) == 0
-
-
-class TestFormatFunctions:
-    """Tests for the formatting functions."""
-
-    async def test_format_fastmcp_info(self):
-        """Test formatting as FastMCP-specific JSON."""
-        mcp = FastMCP("TestServer", instructions="Test instructions", version="1.2.3")
-
-        @mcp.tool
-        def test_tool(x: int) -> dict:
-            """A test tool."""
-            return {"result": x * 2}
-
-        info = await inspect_fastmcp(mcp)
-        json_bytes = await format_fastmcp_info(info)
-
-        # Verify it's valid JSON
-        import json
-
-        data = json.loads(json_bytes)
-
-        # Check FastMCP-specific fields are present
-        assert "server" in data
-        assert data["server"]["name"] == "TestServer"
-        assert data["server"]["instructions"] == "Test instructions"
-        assert data["server"]["generation"] == 2  # v2 server
-        assert data["server"]["version"] == "1.2.3"
-        assert "capabilities" in data["server"]
-
-        # Check environment information
-        assert "environment" in data
-        assert data["environment"]["fastmcp"] == fastmcp.__version__
-        assert data["environment"]["mcp"] == importlib.metadata.version("mcp")
-
-        # Check tools
-        assert len(data["tools"]) == 1
-        assert data["tools"][0]["name"] == "test_tool"
-        assert data["tools"][0]["enabled"] is True
-        assert "tags" in data["tools"][0]
-
-    async def test_format_mcp_info(self):
-        """Test formatting as MCP protocol JSON."""
-        mcp = FastMCP("TestServer", instructions="Test instructions", version="2.0.0")
-
-        @mcp.tool
-        def add(a: int, b: int) -> int:
-            """Add two numbers."""
-            return a + b
-
-        @mcp.prompt
-        def test_prompt(name: str) -> list:
-            """Test prompt."""
-            return [{"role": "user", "content": f"Hello {name}"}]
-
-        json_bytes = await format_mcp_info(mcp)
-
-        # Verify it's valid JSON
-        import json
-
-        data = json.loads(json_bytes)
-
-        # Check MCP protocol structure with camelCase
-        assert "serverInfo" in data
-        assert data["serverInfo"]["name"] == "TestServer"
-
-        # Check server version in MCP format
-        assert data["serverInfo"]["version"] == "2.0.0"
-
-        # MCP format SHOULD have environment fields
-        assert "environment" in data
-        assert data["environment"]["fastmcp"] == fastmcp.__version__
-        assert data["environment"]["mcp"] == importlib.metadata.version("mcp")
-        assert "capabilities" in data
-
-        assert "tools" in data
-        assert "prompts" in data
-        assert "resources" in data
-        assert "resourceTemplates" in data
-
-        # Check tools have MCP format (camelCase fields)
-        assert len(data["tools"]) == 1
-        assert data["tools"][0]["name"] == "add"
-        assert "inputSchema" in data["tools"][0]
-
-        # FastMCP-specific fields should not be present
-        assert "tags" not in data["tools"][0]
-        assert "enabled" not in data["tools"][0]
-
-    async def test_format_info_with_fastmcp_format(self):
-        """Test format_info with fastmcp format."""
-        mcp = FastMCP("TestServer")
-
-        @mcp.tool
-        def test() -> str:
-            return "test"
-
-        # Test with string format
-        json_bytes = await format_info(mcp, "fastmcp")
-        import json
-
-        data = json.loads(json_bytes)
-        assert data["server"]["name"] == "TestServer"
-        assert "tags" in data["tools"][0]  # FastMCP-specific field
-
-        # Test with enum format
-        json_bytes = await format_info(mcp, InspectFormat.FASTMCP)
-        data = json.loads(json_bytes)
-        assert data["server"]["name"] == "TestServer"
-
-    async def test_format_info_with_mcp_format(self):
-        """Test format_info with mcp format."""
-        mcp = FastMCP("TestServer")
-
-        @mcp.tool
-        def test() -> str:
-            return "test"
-
-        json_bytes = await format_info(mcp, "mcp")
-
-        import json
-
-        data = json.loads(json_bytes)
-        assert "serverInfo" in data
-        assert "tools" in data
-        assert "inputSchema" in data["tools"][0]  # MCP uses camelCase
-
-    async def test_format_info_requires_format(self):
-        """Test that format_info requires a format parameter."""
-        mcp = FastMCP("TestServer")
-
-        @mcp.tool
-        def test() -> str:
-            return "test"
-
-        # Should work with valid formats
-        json_bytes = await format_info(mcp, "fastmcp")
-        assert json_bytes
-
-        json_bytes = await format_info(mcp, "mcp")
-        assert json_bytes
-
-        # Should fail with invalid format
-        import pytest
-
-        with pytest.raises(ValueError, match="not a valid InspectFormat"):
-            await format_info(mcp, "invalid")  # type: ignore
-
-    async def test_tool_with_output_schema(self):
-        """Test that output_schema is properly extracted and included."""
-        mcp = FastMCP("TestServer")
-
-        @mcp.tool(
-            output_schema={
-                "type": "object",
-                "properties": {
-                    "result": {"type": "number"},
-                    "message": {"type": "string"},
-                },
-            }
-        )
-        def compute(x: int) -> dict:
-            """Compute something."""
-            return {"result": x * 2, "message": f"Doubled {x}"}
-
-        info = await inspect_fastmcp(mcp)
-
-        # Check output_schema is captured
-        assert len(info.tools) == 1
-        assert info.tools[0].output_schema is not None
-        assert info.tools[0].output_schema["type"] == "object"
-        assert "result" in info.tools[0].output_schema["properties"]
-
-        # Verify it's included in FastMCP format
-        json_bytes = await format_fastmcp_info(info)
-        import json
-
-        data = json.loads(json_bytes)
-        # Tools are at the top level, not nested
-        assert data["tools"][0]["output_schema"]["type"] == "object"

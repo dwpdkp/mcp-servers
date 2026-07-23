@@ -1,6 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from fastmcp.cli.install import install_app
+from fastmcp.cli.install.shared import validate_server_name
+from fastmcp.cli.install.stdio import install_stdio
 
 
 class TestInstallApp:
@@ -25,7 +29,9 @@ class TestInstallApp:
             install_app.parse_args(["claude-desktop", "--help"])
             install_app.parse_args(["cursor", "--help"])
             install_app.parse_args(["gemini-cli", "--help"])
+            install_app.parse_args(["goose", "--help"])
             install_app.parse_args(["mcp-json", "--help"])
+            install_app.parse_args(["stdio", "--help"])
         except SystemExit:
             # Help commands exit with 0, that's expected
             pass
@@ -139,6 +145,20 @@ class TestClaudeDesktopInstall:
         assert bound.arguments["project"] == Path("/my/project")
         assert bound.arguments["with_requirements"] == Path("reqs.txt")
 
+    def test_claude_desktop_with_config_path(self):
+        """Test claude-desktop install with custom config path."""
+        command, bound, _ = install_app.parse_args(
+            ["claude-desktop", "server.py", "--config-path", "/custom/path/Claude"]
+        )
+
+        assert bound.arguments["config_path"] == Path("/custom/path/Claude")
+
+    def test_claude_desktop_without_config_path(self):
+        """Test claude-desktop install without config path defaults to None."""
+        command, bound, _ = install_app.parse_args(["claude-desktop", "server.py"])
+
+        assert bound.arguments.get("config_path") is None
+
 
 class TestCursorInstall:
     """Test cursor install command."""
@@ -163,6 +183,53 @@ class TestCursorInstall:
         assert bound.arguments["server_name"] == "test-server"
 
 
+class TestGooseInstall:
+    """Test goose install command."""
+
+    def test_goose_basic(self):
+        """Test basic goose install command parsing."""
+        command, bound, _ = install_app.parse_args(
+            ["goose", "server.py", "--name", "test-server"]
+        )
+
+        assert command is not None
+        assert bound.arguments["server_spec"] == "server.py"
+        assert bound.arguments["server_name"] == "test-server"
+
+    def test_goose_with_options(self):
+        """Test goose install with various options."""
+        command, bound, _ = install_app.parse_args(
+            [
+                "goose",
+                "server.py",
+                "--name",
+                "test-server",
+                "--with",
+                "package1",
+                "--with",
+                "package2",
+                "--env",
+                "VAR1=value1",
+            ]
+        )
+
+        assert bound.arguments["with_packages"] == ["package1", "package2"]
+        assert bound.arguments["env_vars"] == ["VAR1=value1"]
+
+    def test_goose_with_python(self):
+        """Test goose install with --python option."""
+        command, bound, _ = install_app.parse_args(
+            [
+                "goose",
+                "server.py",
+                "--python",
+                "3.11",
+            ]
+        )
+
+        assert bound.arguments["python"] == "3.11"
+
+
 class TestMcpJsonInstall:
     """Test mcp-json install command."""
 
@@ -183,6 +250,74 @@ class TestMcpJsonInstall:
         )
 
         assert bound.arguments["copy"] is True
+
+
+class TestStdioInstall:
+    """Test stdio install command."""
+
+    def test_stdio_basic(self):
+        """Test basic stdio install command parsing."""
+        command, bound, _ = install_app.parse_args(["stdio", "server.py"])
+
+        assert command is not None
+        assert bound.arguments["server_spec"] == "server.py"
+
+    def test_stdio_with_copy(self):
+        """Test stdio install with copy to clipboard option."""
+        command, bound, _ = install_app.parse_args(["stdio", "server.py", "--copy"])
+
+        assert bound.arguments["copy"] is True
+
+    def test_stdio_with_packages(self):
+        """Test stdio install with additional packages."""
+        command, bound, _ = install_app.parse_args(
+            ["stdio", "server.py", "--with", "requests", "--with", "httpx"]
+        )
+
+        assert bound.arguments["with_packages"] == ["requests", "httpx"]
+
+    def test_install_stdio_generates_command(self, tmp_path: Path):
+        """Test that install_stdio produces a shell command containing fastmcp run."""
+        server_file = tmp_path / "server.py"
+        server_file.write_text("# placeholder")
+
+        # Capture stdout
+        import io
+        import sys
+
+        captured = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            result = install_stdio(file=server_file, server_object=None)
+        finally:
+            sys.stdout = old_stdout
+
+        assert result is True
+        output = captured.getvalue()
+        assert "fastmcp" in output
+        assert "run" in output
+        assert str(server_file.resolve()) in output
+
+    def test_install_stdio_with_object(self, tmp_path: Path):
+        """Test that install_stdio includes the :object suffix."""
+        server_file = tmp_path / "server.py"
+        server_file.write_text("# placeholder")
+
+        import io
+        import sys
+
+        captured = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            result = install_stdio(file=server_file, server_object="app")
+        finally:
+            sys.stdout = old_stdout
+
+        assert result is True
+        output = captured.getvalue()
+        assert f"{server_file.resolve()}:app" in output
 
 
 class TestGeminiCliInstall:
@@ -253,6 +388,8 @@ class TestInstallCommandParsing:
             ["claude-desktop", "server.py"],
             ["cursor", "server.py"],
             ["gemini-cli", "server.py"],
+            ["goose", "server.py"],
+            ["stdio", "server.py"],
         ]
 
         for cmd_args in commands_to_test:
@@ -267,6 +404,12 @@ class TestInstallCommandParsing:
         assert command is not None
         assert bound.arguments["server_spec"] == "server.py"
 
+    def test_stdio_minimal(self):
+        """Test that stdio works with minimal arguments."""
+        command, bound, _ = install_app.parse_args(["stdio", "server.py"])
+        assert command is not None
+        assert bound.arguments["server_spec"] == "server.py"
+
     def test_python_option(self):
         """Test --python option for all install commands."""
         commands_to_test = [
@@ -274,7 +417,9 @@ class TestInstallCommandParsing:
             ["claude-desktop", "server.py", "--python", "3.11"],
             ["cursor", "server.py", "--python", "3.11"],
             ["gemini-cli", "server.py", "--python", "3.11"],
+            ["goose", "server.py", "--python", "3.11"],
             ["mcp-json", "server.py", "--python", "3.11"],
+            ["stdio", "server.py", "--python", "3.11"],
         ]
 
         for cmd_args in commands_to_test:
@@ -290,6 +435,7 @@ class TestInstallCommandParsing:
             ["cursor", "server.py", "--with-requirements", "requirements.txt"],
             ["gemini-cli", "server.py", "--with-requirements", "requirements.txt"],
             ["mcp-json", "server.py", "--with-requirements", "requirements.txt"],
+            ["stdio", "server.py", "--with-requirements", "requirements.txt"],
         ]
 
         for cmd_args in commands_to_test:
@@ -305,9 +451,44 @@ class TestInstallCommandParsing:
             ["cursor", "server.py", "--project", "/path/to/project"],
             ["gemini-cli", "server.py", "--project", "/path/to/project"],
             ["mcp-json", "server.py", "--project", "/path/to/project"],
+            ["stdio", "server.py", "--project", "/path/to/project"],
         ]
 
         for cmd_args in commands_to_test:
             command, bound, _ = install_app.parse_args(cmd_args)
             assert command is not None
             assert str(bound.arguments["project"]) == str(Path("/path/to/project"))
+
+
+class TestServerNameValidation:
+    """Test server name validation rejects shell metacharacters."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "my-server",
+            "my_server",
+            "My Server",
+            "server.v2",
+            "test123",
+        ],
+    )
+    def test_valid_names(self, name: str):
+        assert validate_server_name(name) == name
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "test&calc",
+            "test|whoami",
+            "test;ls",
+            "test$(id)",
+            "test`id`",
+            'test"quoted',
+            "test>file",
+            "test<file",
+        ],
+    )
+    def test_rejects_shell_metacharacters(self, name: str):
+        with pytest.raises(SystemExit):
+            validate_server_name(name)

@@ -1,26 +1,11 @@
 [project]
 name = "fastmcp"
-dynamic = ["version"]
+dynamic = ["version", "dependencies", "optional-dependencies"]
 description = "The fast, Pythonic way to build MCP servers and clients."
 authors = [{ name = "Jeremiah Lowin" }]
-dependencies = [
-    "python-dotenv>=1.1.0",
-    "exceptiongroup>=1.2.2",
-    "httpx>=0.28.1",
-    "mcp>=1.12.4,<2.0.0",
-    "openapi-pydantic>=0.5.1",
-    "rich>=13.9.4",
-    "cyclopts>=3.0.0",
-    "authlib>=1.5.2",
-    "pydantic[email]>=2.11.7",
-    "pyperclip>=1.9.0",
-    "openapi-core>=0.19.5",
-]
-
 requires-python = ">=3.10"
 readme = "README.md"
 license = "Apache-2.0"
-
 keywords = [
     "mcp",
     "mcp server",
@@ -37,45 +22,13 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Typing :: Typed",
 ]
 
-[project.optional-dependencies]
-websockets = ["websockets>=15.0.1"]
-openai = ["openai>=1.102.0"]
-
-[dependency-groups]
-dev = [
-    "dirty-equals>=0.9.0",
-    "fastmcp[openai]",
-    # add optional dependencies for fastmcp dev
-    "fastapi>=0.115.12",
-    "inline-snapshot[dirty-equals]>=0.27.2",
-    "ipython>=8.12.3",
-    "pdbpp>=0.10.3",
-    "pre-commit",
-    "psutil",
-    "pyinstrument>=5.0.2",
-    "pyperclip>=1.9.0",
-    "pytest>=8.3.3",
-    "pytest-asyncio>=0.23.5",
-    "pytest-cov>=6.1.1",
-    "pytest-env>=1.1.5",
-    "pytest-flakefinder",
-    "pytest-httpx>=0.35.0",
-    "pytest-report>=0.2.1",
-    "pytest-timeout>=2.4.0",
-    "pytest-xdist>=3.6.1",
-    "ruff",
-    "ty>=0.0.1a19",
-]
-
-[project.scripts]
-fastmcp = "fastmcp.cli:app"
-
 [project.urls]
 Homepage = "https://gofastmcp.com"
-Repository = "https://github.com/jlowin/fastmcp"
+Repository = "https://github.com/PrefectHQ/fastmcp"
 Documentation = "https://gofastmcp.com"
 
 [build-system]
@@ -85,8 +38,27 @@ build-backend = "hatchling.build"
 [tool.hatch.version]
 source = "uv-dynamic-versioning"
 
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+only-include = []
+exclude = ["/*"]
+
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[tool.hatch.metadata.hooks.uv-dynamic-versioning]
+dependencies = [
+    "fastmcp-slim[client,server]=={{ version }}",
+]
+
+[tool.hatch.metadata.hooks.uv-dynamic-versioning.optional-dependencies]
+anthropic = ["fastmcp-slim[anthropic]=={{ version }}"]
+apps = ["fastmcp-slim[apps]=={{ version }}"]
+azure = ["fastmcp-slim[azure]=={{ version }}"]
+code-mode = ["fastmcp-slim[code-mode]=={{ version }}"]
+gemini = ["fastmcp-slim[gemini]=={{ version }}"]
+openai = ["fastmcp-slim[openai]=={{ version }}"]
+tasks = ["fastmcp-slim[tasks]=={{ version }}"]
 
 [tool.uv-dynamic-versioning]
 vcs = "git"
@@ -94,25 +66,70 @@ style = "pep440"
 bump = true
 fallback-version = "0.0.0"
 
+[tool.uv.workspace]
+members = ["fastmcp_slim", "fastmcp_remote"]
+
+[tool.uv]
+default-groups = ["dev"]
+exclude-newer = "1 week"
+exclude-newer-package = { prefab-ui = false }
+
+[dependency-groups]
+dev = [
+    "dirty-equals>=0.9.0",
+    "fastmcp[anthropic,apps,azure,code-mode,gemini,openai,tasks]",
+    "fastapi>=0.115.12",
+    "fastmcp-remote",
+    "opentelemetry-sdk>=1.20.0",
+    "inline-snapshot[dirty-equals]>=0.27.2",
+    "ipython>=8.12.3",
+    "pdbpp>=0.11.7",
+    "psutil>=7.0.0",
+    "pyinstrument>=5.0.2",
+    "pyperclip>=1.9.0",
+    "pytest>=8.3.3",
+    "pytest-asyncio>=1.2.0",
+    "pytest-cov>=6.1.1",
+    "pytest-env>=1.1.5",
+    "pytest-flakefinder>=1.1.0",
+    "pytest-httpx>=0.35.0",
+    "pytest-report>=0.2.1",
+    "pytest-retry>=1.7.0",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.6.1",
+    "ruff>=0.12.8",
+    "ty>=0.0.55",
+    "prek>=0.2.12",
+    "loq>=0.1.0a3",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.39.0",
+    "pytest-examples>=0.0.18",
+]
+
+[tool.uv.sources]
+fastmcp = { workspace = true }
+fastmcp-slim = { workspace = true }
+fastmcp-remote = { workspace = true }
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "session"
-asyncio_default_test_loop_scope = "session"
-# filterwarnings = ["error::DeprecationWarning"]
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "ignore:Using in-memory token storage:UserWarning",
+    "error:coroutine .* was never awaited:RuntimeWarning",
+    "error:Exception ignored in.*coroutine:pytest.PytestUnraisableExceptionWarning",
+]
 timeout = 5
 env = [
     "FASTMCP_TEST_MODE=1",
     'D:FASTMCP_LOG_LEVEL=DEBUG',
     'D:FASTMCP_ENABLE_RICH_TRACEBACKS=0',
-
 ]
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "client_process: marks tests that spawn client processes via stdio transport. These can create issues when run in the same CI environment as other subprocess-based tests.",
+    "conformance: marks MCP conformance tests (require Node.js/npx)",
 ]
-# Automatically mark all tests in integration_tests folder
-pythonpath = ["."]
+pythonpath = ["fastmcp_slim", "fastmcp_remote"]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
@@ -120,24 +137,87 @@ python_functions = ["test_*"]
 addopts = ["--inline-snapshot=disable"]
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["fastmcp_slim", "fastmcp_remote", "tests"]
 exclude = ["**/node_modules", "**/__pycache__", ".venv", ".git", "dist"]
 
 [tool.ty.environment]
 python-version = "3.10"
 
-[tool.ty.rules]
-# Rules with too many errors to fix right now (40+ each)
-no-matching-overload = "ignore" # 126 errors  
-unknown-argument = "ignore"     # 61 errors
+[tool.ty.analysis]
+replace-imports-with-any = ["prefab_ui.**"]
 
-# Rules with moderate errors that need more investigation
-call-non-callable = "ignore" # 7 errors
+[tool.ty.rules]
+division-by-zero = "warn"
+possibly-missing-attribute = "warn"
+possibly-missing-import = "warn"
+possibly-unresolved-reference = "warn"
+unsupported-dynamic-base = "warn"
+unsupported-operator = "warn"
+unused-ignore-comment = "warn"
+
+[tool.ty.terminal]
+error-on-warning = true
 
 [tool.ruff.lint]
-extend-select = ["I", "UP"]
+fixable = ["ALL"]
+ignore = [
+    "COM812",
+    "PERF203",
+    "PLR0913",
+    "SIM102",
+]
+extend-select = [
+    "B",
+    "C4",
+    "DTZ",
+    "ERA",
+    "FA",
+    "FLY",
+    "I",
+    "INP",
+    "ISC",
+    "LOG",
+    "PERF",
+    "PIE",
+    "PLE",
+    "RSE",
+    "RUF",
+    "SIM",
+    "SLOT",
+    "T20",
+    "TID",
+    "UP",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fastmcp", "fastmcp_remote"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401", "I001", "RUF013"]
-# allow imports not at the top of the file
-"src/fastmcp/__init__.py" = ["E402"]
+"fastmcp_slim/fastmcp/__init__.py" = ["E402"]
+"fastmcp_slim/fastmcp/cli/**.py" = ["T20"]
+"fastmcp_slim/fastmcp/client/oauth_callback.py" = ["T20"]
+"fastmcp_slim/fastmcp/contrib/**/example.py" = ["T20"]
+"!fastmcp_slim/fastmcp/**.py" = [
+    "B",
+    "C4",
+    "DTZ",
+    "ERA",
+    "FA",
+    "FLY",
+    "INP",
+    "ISC",
+    "LOG",
+    "PERF",
+    "PIE",
+    "PLE",
+    "RSE",
+    "RUF",
+    "SIM",
+    "SLOT",
+    "T20",
+    "TID",
+]
+
+[tool.codespell]
+ignore-words-list = "asend,shttp,te"

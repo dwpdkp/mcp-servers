@@ -1,5 +1,6 @@
 name: Marvin Label Triage
-description: Automatically triage GitHub issues and PRs using Marvin
+# Automatically triage GitHub issues and PRs using Marvin
+
 on:
   issues:
     types: [opened]
@@ -17,7 +18,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  triage-issue:
+  label-issue-or-pr:
+    if: github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -27,25 +29,33 @@ jobs:
 
     steps:
       - name: Checkout base repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: ${{ github.repository }}
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Generate Marvin App token
         id: marvin-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MARVIN_APP_ID }}
           private-key: ${{ secrets.MARVIN_APP_PRIVATE_KEY }}
+          owner: PrefectHQ
 
-      - name: Create triage prompt
+      - name: Set triage prompt
+        id: triage-prompt
         run: |
-          mkdir -p /tmp/claude-prompts
-          cat > /tmp/claude-prompts/triage-prompt.txt << 'EOF'
+          cat >> $GITHUB_OUTPUT << 'EOF'
+          PROMPT<<PROMPT_END
           You're an issue triage assistant for FastMCP, a Python framework for building Model Context Protocol servers and clients. Your task is to analyze issues/PRs and apply appropriate labels.
 
-          IMPORTANT: Your ONLY action should be to apply labels using mcp__github__update_issue. DO NOT post any comments.
+          IMPORTANT: Your primary action should be to apply labels using mcp__github__update_issue. DO NOT post comments EXCEPT when applying the too-long label (see below).
+
+          CRITICAL — LABEL MECHANICS:
+          - `mcp__github__update_issue` REPLACES all labels on the issue — it does not add to them.
+          - Before applying labels, read the issue's current labels with `mcp__github__get_issue`.
+          - Always include any existing labels you want to keep alongside the new ones.
+          - Only apply labels that exist in the repository (from `gh label list` in step 1). Never invent labels.
 
           Issue/PR Information:
           - REPO: ${{ github.repository }}
@@ -64,7 +74,7 @@ jobs:
 
           3. Analyze and apply labels based on these guidelines:
 
-          CORE CATEGORIES (apply EXACTLY ONE - these are mutually exclusive):
+          CORE CATEGORIES (apply EXACTLY ONE - these are mutually exclusive; skip if applying too-long):
           - bug: Reports of broken functionality OR PRs that fix bugs
           - enhancement: New functions/endpoints, improvements to existing features, internal tooling, workflow improvements, minor new capabilities
           - feature: ONLY for major headline functionality worthy of a blog post announcement (2-4 per release, never for issues)
@@ -92,8 +102,12 @@ jobs:
 
           STATUS (apply if applicable):
           - needs more info: Issue lacks reproduction steps, error messages, or clear description
-          - good first issue: ONLY if it's clearly scoped, has obvious solution, and touches limited files
           - invalid: Spam, completely off-topic, or nonsensical (often LLM-generated)
+          - too-long: Apply when an issue or PR doesn't conform to CONTRIBUTING.md. Issues should be a short problem description, an MRE, and expected vs. actual behavior — not a design document. PRs should have a focused description of the change — not a report. We don't need proposed solutions or design alternatives (the issue should describe the problem and let maintainers architect the fix), summaries of what tests cover, explanations of code we can read ourselves, or speculative root-cause analysis. Common LLM failure modes to watch for: verbose "diagnostic" writeups, large proposed patches in issue bodies, multi-section reports restating what's visible in the diff, numbered lists of possible approaches or solutions, "suggested" schemas/shapes/APIs, generic analysis that doesn't reference specific code, and "Notes" sections. But these are heuristics, not rules — a complex PR may legitimately need more context, and a brief submission can still be low-quality. Judge by whether the content helps a reviewer or just adds noise. When applying too-long, still apply the core category and area labels — too-long is a format signal, not a replacement for categorization. Issues still need to be findable by category.
+
+          WHEN APPLYING too-long: After labeling, post a brief comment using mcp__github__add_issue_comment:
+            "Thanks for the report. This issue goes beyond what our contributor guidelines ask for — we just need a short problem description and an MRE. Please see our [contributing guidelines](https://github.com/PrefectHQ/fastmcp/blob/main/CONTRIBUTING.md) and condense this issue. We'll triage it once it's trimmed down."
+            Use this exact text (or very close to it). Do not editorialize or add details.
 
           AREA LABELS (apply ONLY when thematically central to the issue):
           - cli: Issues primarily about FastMCP CLI commands (run, dev, install)
@@ -102,15 +116,15 @@ jobs:
           - auth: Authentication is the main concern (Bearer, JWT, OAuth, WorkOS)
           - openapi: OpenAPI integration/parsing is the primary topic
           - http: HTTP transport or networking is the main issue
-          - contrib: Specifically about community contributions in src/contrib/
+          - contrib: Specifically about community contributions in fastmcp_slim/fastmcp/contrib/
           - tests: Issues primarily about testing infrastructure, CI/CD workflows, or test coverage
+          - security: Apply ONLY when the issue/PR addresses an exploitable vulnerability or hardens against one. Examples: SSRF, LFI, path traversal, injection, auth bypass allowing unauthorized access, scope escalation, open redirects. Do NOT apply for ordinary auth bugs (wrong scopes returned, token refresh logic, OAuth flow correctness) unless an attacker could exploit the bug to bypass access controls or escalate privileges. The key question: "Could a malicious actor exploit this?" If the answer is just "it breaks for legitimate users," that's a bug, not a security issue.
 
-          IMPORTANT LABELING RULES:
-          - Be selective - only apply labels that are clearly relevant
-          - Don't apply area labels just because a file in that area is mentioned
-          - The issue must be PRIMARILY about that area to get the label
-          - When in doubt, don't apply the label
-          - Apply 2-5 labels total typically (category + maybe priority + maybe 1-2 areas)
+          LABELING PRINCIPLES:
+          - Precision over recall: a missing label is a minor inconvenience; a wrong label sends the wrong people to the wrong issue. When in doubt, don't apply.
+          - Don't apply area labels just because a file in that area is mentioned — the issue must be PRIMARILY about that area.
+          - Apply 2-5 labels total typically (category + maybe priority + maybe 1-2 areas).
+          - For ambiguous cases (bug vs enhancement, which area label), prefer the more conservative choice or omit the uncertain label entirely.
 
           META LABELS (rarely needed for issues):
           - dependencies: Only for dependabot PRs or issues specifically about package updates
@@ -118,40 +132,28 @@ jobs:
 
           4. Apply selected labels:
              Use mcp__github__update_issue to apply your selected labels
-             DO NOT post any comments
+             DO NOT post any comments unless applying too-long (see above)
+          PROMPT_END
           EOF
 
-      - name: Setup GitHub MCP Server
-        run: |
-          mkdir -p /tmp/mcp-config
-          cat > /tmp/mcp-config/mcp-servers.json << 'EOF'
-          {
-            "mcpServers": {
-              "github": {
-                "command": "docker",
-                "args": [
-                  "run",
-                  "-i",
-                  "--rm",
-                  "-e",
-                  "GITHUB_PERSONAL_ACCESS_TOKEN",
-                  "ghcr.io/github/github-mcp-server:sha-7aced2b"
-                ],
-                "env": {
-                  "GITHUB_PERSONAL_ACCESS_TOKEN": "${{ steps.marvin-token.outputs.token }}"
-                }
+      - name: Clean up stale Claude locks
+        run: rm -rf ~/.claude/.locks ~/.local/state/claude/locks || true
+
+      - name: Run Marvin for Issue Triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          github_token: ${{ steps.marvin-token.outputs.token }}
+          bot_name: "Marvin Context Protocol"
+          prompt: ${{ steps.triage-prompt.outputs.PROMPT }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY_FOR_CI }}
+          allowed_non_write_users: "*"
+          allowed_bots: "marvin-context-protocol"
+          claude_args: |
+            --allowedTools Bash(gh label list),mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__update_issue,mcp__github__add_issue_comment,mcp__github__get_pull_request_files
+          settings: |
+            {
+              "model": "claude-sonnet-4-6",
+              "env": {
+                "GH_TOKEN": "${{ steps.marvin-token.outputs.token }}"
               }
             }
-          }
-          EOF
-
-      - name: Run Marvin for Issue Triage
-        uses: anthropics/claude-code-base-action@beta
-        with:
-          prompt_file: /tmp/claude-prompts/triage-prompt.txt
-          allowed_tools: "Bash(gh label list),mcp__github__get_issue,mcp__github__get_issue_comments,mcp__github__update_issue,mcp__github__get_pull_request_files"
-          timeout_minutes: "5"
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY_FOR_CI }}
-          mcp_config: /tmp/mcp-config/mcp-servers.json
-          claude_env: |
-            GH_TOKEN: ${{ steps.marvin-token.outputs.token }}

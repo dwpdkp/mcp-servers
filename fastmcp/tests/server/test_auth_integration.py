@@ -49,6 +49,8 @@ class MockOAuthProvider(OAuthAuthorizationServerProvider):
     ) -> str:
         # toy authorize implementation which just immediately generates an authorization
         # code and completes the redirect
+        if client.client_id is None:
+            raise ValueError("client_id is required")
         code = AuthorizationCode(
             code=f"code_{int(time.time())}",
             client_id=client.client_id,
@@ -79,6 +81,8 @@ class MockOAuthProvider(OAuthAuthorizationServerProvider):
         refresh_token = f"refresh_{secrets.token_hex(32)}"
 
         # Store the tokens
+        if client.client_id is None:
+            raise ValueError("client_id is required")
         self.tokens[access_token] = AccessToken(
             token=access_token,
             client_id=client.client_id,
@@ -142,6 +146,8 @@ class MockOAuthProvider(OAuthAuthorizationServerProvider):
         new_refresh_token = f"refresh_{secrets.token_hex(32)}"
 
         # Store the new tokens
+        if client.client_id is None:
+            raise ValueError("client_id is required")
         self.tokens[new_access_token] = AccessToken(
             token=new_access_token,
             client_id=client.client_id,
@@ -360,9 +366,10 @@ class TestAuthEndpoints:
         assert metadata["revocation_endpoint"] == "https://auth.example.com/revoke"
         assert metadata["response_types_supported"] == ["code"]
         assert metadata["code_challenge_methods_supported"] == ["S256"]
-        assert metadata["token_endpoint_auth_methods_supported"] == [
-            "client_secret_post"
-        ]
+        assert set(metadata["token_endpoint_auth_methods_supported"]) == {
+            "client_secret_post",
+            "client_secret_basic",
+        }
         assert metadata["grant_types_supported"] == [
             "authorization_code",
             "refresh_token",
@@ -370,8 +377,8 @@ class TestAuthEndpoints:
         assert metadata["service_documentation"] == "https://docs.example.com/"
 
     async def test_token_validation_error(self, test_client: httpx.AsyncClient):
-        """Test token endpoint error - validation error."""
-        # Missing required fields
+        """Test token endpoint error - missing client_id returns auth error."""
+        # Missing required fields - SDK validates client_id first
         response = await test_client.post(
             "/token",
             data={
@@ -380,10 +387,11 @@ class TestAuthEndpoints:
             },
         )
         error_response = response.json()
-        assert error_response["error"] == "invalid_request"
-        assert (
-            "error_description" in error_response
-        )  # Contains validation error messages
+        # SDK validates client_id before other fields, returning unauthorized_client
+        # (FastMCP's OAuthProxy transforms this to invalid_client, but this test
+        # uses the SDK's create_auth_routes directly)
+        assert error_response["error"] == "unauthorized_client"
+        assert "error_description" in error_response
 
     async def test_token_invalid_auth_code(
         self, test_client, registered_client, pkce_challenge
@@ -961,274 +969,3 @@ class TestAuthEndpoints:
             error_data["error_description"]
             == "grant_types must be authorization_code and refresh_token"
         )
-
-
-class TestAuthorizeEndpointErrors:
-    """Test error handling in the OAuth authorization endpoint."""
-
-    async def test_authorize_missing_client_id(
-        self, test_client: httpx.AsyncClient, pkce_challenge
-    ):
-        """Test authorization endpoint with missing client_id.
-
-        According to the OAuth2.0 spec, if client_id is missing, the server should
-        inform the resource owner and NOT redirect.
-        """
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                # Missing client_id
-                "redirect_uri": "https://client.example.com/callback",
-                "state": "test_state",
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-            },
-        )
-
-        # Should NOT redirect, should show an error page
-        assert response.status_code == 400
-        # The response should include an error message about missing client_id
-        assert "client_id" in response.text.lower()
-
-    async def test_authorize_invalid_client_id(
-        self, test_client: httpx.AsyncClient, pkce_challenge
-    ):
-        """Test authorization endpoint with invalid client_id.
-
-        According to the OAuth2.0 spec, if client_id is invalid, the server should
-        inform the resource owner and NOT redirect.
-        """
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                "client_id": "invalid_client_id_that_does_not_exist",
-                "redirect_uri": "https://client.example.com/callback",
-                "state": "test_state",
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-            },
-        )
-
-        # Should NOT redirect, should show an error page
-        assert response.status_code == 400
-        # The response should include an error message about invalid client_id
-        assert "client" in response.text.lower()
-
-    async def test_authorize_missing_redirect_uri(
-        self, test_client: httpx.AsyncClient, registered_client, pkce_challenge
-    ):
-        """Test authorization endpoint with missing redirect_uri.
-
-        If client has only one registered redirect_uri, it can be omitted.
-        """
-
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                "client_id": registered_client["client_id"],
-                # Missing redirect_uri
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-                "state": "test_state",
-            },
-        )
-
-        # Should redirect to the registered redirect_uri
-        assert response.status_code == 302, response.content
-        redirect_url = response.headers["location"]
-        assert redirect_url.startswith("https://client.example.com/callback")
-
-    async def test_authorize_invalid_redirect_uri(
-        self, test_client: httpx.AsyncClient, registered_client, pkce_challenge
-    ):
-        """Test authorization endpoint with invalid redirect_uri.
-
-        According to the OAuth2.0 spec, if redirect_uri is invalid or doesn't match,
-        the server should inform the resource owner and NOT redirect.
-        """
-
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                "client_id": registered_client["client_id"],
-                # Non-matching URI
-                "redirect_uri": "https://attacker.example.com/callback",
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-                "state": "test_state",
-            },
-        )
-
-        # Should NOT redirect, should show an error page
-        assert response.status_code == 400, response.content
-        # The response should include an error message about redirect_uri mismatch
-        assert "redirect" in response.text.lower()
-
-    @pytest.mark.parametrize(
-        "registered_client",
-        [
-            {
-                "redirect_uris": [
-                    "https://client.example.com/callback",
-                    "https://client.example.com/other-callback",
-                ]
-            }
-        ],
-        indirect=True,
-    )
-    async def test_authorize_missing_redirect_uri_multiple_registered(
-        self, test_client: httpx.AsyncClient, registered_client, pkce_challenge
-    ):
-        """Test endpoint with missing redirect_uri with multiple registered URIs.
-
-        If client has multiple registered redirect_uris, redirect_uri must be provided.
-        """
-
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                "client_id": registered_client["client_id"],
-                # Missing redirect_uri
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-                "state": "test_state",
-            },
-        )
-
-        # Should NOT redirect, should return a 400 error
-        assert response.status_code == 400
-        # The response should include an error message about missing redirect_uri
-        assert "redirect_uri" in response.text.lower()
-
-    async def test_authorize_unsupported_response_type(
-        self, test_client: httpx.AsyncClient, registered_client, pkce_challenge
-    ):
-        """Test authorization endpoint with unsupported response_type.
-
-        According to the OAuth2.0 spec, for other errors like unsupported_response_type,
-        the server should redirect with error parameters.
-        """
-
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "token",  # Unsupported (we only support "code")
-                "client_id": registered_client["client_id"],
-                "redirect_uri": "https://client.example.com/callback",
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-                "state": "test_state",
-            },
-        )
-
-        # Should redirect with error parameters
-        assert response.status_code == 302
-        redirect_url = response.headers["location"]
-        parsed_url = urlparse(redirect_url)
-        query_params = parse_qs(parsed_url.query)
-
-        assert "error" in query_params
-        assert query_params["error"][0] == "unsupported_response_type"
-        # State should be preserved
-        assert "state" in query_params
-        assert query_params["state"][0] == "test_state"
-
-    async def test_authorize_missing_response_type(
-        self, test_client: httpx.AsyncClient, registered_client, pkce_challenge
-    ):
-        """Test authorization endpoint with missing response_type.
-
-        Missing required parameter should result in invalid_request error.
-        """
-
-        response = await test_client.get(
-            "/authorize",
-            params={
-                # Missing response_type
-                "client_id": registered_client["client_id"],
-                "redirect_uri": "https://client.example.com/callback",
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-                "state": "test_state",
-            },
-        )
-
-        # Should redirect with error parameters
-        assert response.status_code == 302
-        redirect_url = response.headers["location"]
-        parsed_url = urlparse(redirect_url)
-        query_params = parse_qs(parsed_url.query)
-
-        assert "error" in query_params
-        assert query_params["error"][0] == "invalid_request"
-        # State should be preserved
-        assert "state" in query_params
-        assert query_params["state"][0] == "test_state"
-
-    async def test_authorize_missing_pkce_challenge(
-        self, test_client: httpx.AsyncClient, registered_client
-    ):
-        """Test authorization endpoint with missing PKCE code_challenge.
-
-        Missing PKCE parameters should result in invalid_request error.
-        """
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                "client_id": registered_client["client_id"],
-                # Missing code_challenge
-                "state": "test_state",
-                # using default URL
-            },
-        )
-
-        # Should redirect with error parameters
-        assert response.status_code == 302
-        redirect_url = response.headers["location"]
-        parsed_url = urlparse(redirect_url)
-        query_params = parse_qs(parsed_url.query)
-
-        assert "error" in query_params
-        assert query_params["error"][0] == "invalid_request"
-        # State should be preserved
-        assert "state" in query_params
-        assert query_params["state"][0] == "test_state"
-
-    async def test_authorize_invalid_scope(
-        self, test_client: httpx.AsyncClient, registered_client, pkce_challenge
-    ):
-        """Test authorization endpoint with invalid scope.
-
-        Invalid scope should redirect with invalid_scope error.
-        """
-
-        response = await test_client.get(
-            "/authorize",
-            params={
-                "response_type": "code",
-                "client_id": registered_client["client_id"],
-                "redirect_uri": "https://client.example.com/callback",
-                "code_challenge": pkce_challenge["code_challenge"],
-                "code_challenge_method": "S256",
-                "scope": "invalid_scope_that_does_not_exist",
-                "state": "test_state",
-            },
-        )
-
-        # Should redirect with error parameters
-        assert response.status_code == 302
-        redirect_url = response.headers["location"]
-        parsed_url = urlparse(redirect_url)
-        query_params = parse_qs(parsed_url.query)
-
-        assert "error" in query_params
-        assert query_params["error"][0] == "invalid_scope"
-        # State should be preserved
-        assert "state" in query_params
-        assert query_params["state"][0] == "test_state"

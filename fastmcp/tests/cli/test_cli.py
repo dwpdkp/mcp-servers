@@ -14,7 +14,7 @@ class TestMainCLI:
         """Test that the main app is properly configured."""
         # app.name is a tuple in cyclopts
         assert "fastmcp" in app.name
-        assert "FastMCP 2.0" in app.help
+        assert "FastMCP" in app.help
         # Just check that version exists, not the specific value
         assert hasattr(app, "version")
 
@@ -39,7 +39,8 @@ class TestMainCLI:
 class TestVersionCommand:
     """Test the version command."""
 
-    def test_version_command_execution(self):
+    @patch("fastmcp.cli.cli.check_for_newer_version", return_value=None)
+    def test_version_command_execution(self, mock_check):
         """Test that version command executes properly."""
         # The version command should execute without raising SystemExit
         command, bound, _ = app.parse_args(["version"])
@@ -48,14 +49,16 @@ class TestVersionCommand:
     def test_version_command_parsing(self):
         """Test that the version command parses arguments correctly."""
         command, bound, _ = app.parse_args(["version"])
-        assert command.__name__ == "version"  # type: ignore[attr-defined]
+        assert callable(command)
+        assert command.__name__ == "version"  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
         # Default arguments aren't included in bound.arguments
         assert bound.arguments == {}
 
     def test_version_command_with_copy_flag(self):
         """Test that the version command parses --copy flag correctly."""
         command, bound, _ = app.parse_args(["version", "--copy"])
-        assert command.__name__ == "version"  # type: ignore[attr-defined]
+        assert callable(command)
+        assert command.__name__ == "version"  # type: ignore[attr-defined]  # ty:ignore[unresolved-attribute]
         assert bound.arguments == {"copy": True}
 
     @patch("fastmcp.cli.cli.pyperclip.copy")
@@ -88,10 +91,10 @@ class TestVersionCommand:
 class TestDevCommand:
     """Test the dev command."""
 
-    def test_dev_command_parsing(self):
-        """Test that dev command can be parsed with various options."""
+    def test_dev_inspector_command_parsing(self):
+        """Test that dev inspector command can be parsed with various options."""
         # Test basic parsing
-        command, bound, _ = app.parse_args(["dev", "server.py"])
+        command, bound, _ = app.parse_args(["dev", "inspector", "server.py"])
         assert command is not None
         assert bound.arguments["server_spec"] == "server.py"
 
@@ -99,6 +102,7 @@ class TestDevCommand:
         command, bound, _ = app.parse_args(
             [
                 "dev",
+                "inspector",
                 "server.py",
                 "--with",
                 "package1",
@@ -112,11 +116,12 @@ class TestDevCommand:
         assert bound.arguments["inspector_version"] == "1.0.0"
         assert bound.arguments["ui_port"] == 3000
 
-    def test_dev_command_parsing_with_new_options(self):
-        """Test dev command parsing with new uv options."""
+    def test_dev_inspector_command_parsing_with_new_options(self):
+        """Test dev inspector command parsing with new uv options."""
         command, bound, _ = app.parse_args(
             [
                 "dev",
+                "inspector",
                 "server.py",
                 "--python",
                 "3.10",
@@ -372,8 +377,8 @@ class TestRunCommand:
         assert bound.arguments["project"] == Path("./test-env")
         assert bound.arguments["skip_source"] is True
 
-    def test_show_cli_banner_setting(self):
-        """Test that show_cli_banner setting works with environment variable."""
+    def test_show_server_banner_setting(self):
+        """Test that show_server_banner setting works with environment variable."""
         import os
         from unittest import mock
 
@@ -381,19 +386,19 @@ class TestRunCommand:
 
         # Test default (banner shown)
         settings = Settings()
-        assert settings.show_cli_banner is True
+        assert settings.show_server_banner is True
 
         # Test with env var set to false (banner hidden)
-        with mock.patch.dict(os.environ, {"FASTMCP_SHOW_CLI_BANNER": "false"}):
+        with mock.patch.dict(os.environ, {"FASTMCP_SHOW_SERVER_BANNER": "false"}):
             settings = Settings()
-            assert settings.show_cli_banner is False
+            assert settings.show_server_banner is False
 
         # Test CLI precedence logic (simulated)
-        with mock.patch.dict(os.environ, {"FASTMCP_SHOW_CLI_BANNER": "true"}):
+        with mock.patch.dict(os.environ, {"FASTMCP_SHOW_SERVER_BANNER": "true"}):
             settings = Settings()
             # CLI --no-banner flag would override
             cli_no_banner = True
-            final = cli_no_banner if cli_no_banner else not settings.show_cli_banner
+            final = cli_no_banner if cli_no_banner else not settings.show_server_banner
             assert final is True  # Banner suppressed by CLI flag
 
 
@@ -416,7 +421,6 @@ class TestWindowsSpecific:
                 ["npx.cmd", "--version"],
                 check=True,
                 capture_output=True,
-                shell=True,
             )
 
     @patch("subprocess.run")
@@ -428,6 +432,23 @@ class TestWindowsSpecific:
             # First call fails, second succeeds
             mock_run.side_effect = [
                 subprocess.CalledProcessError(1, "npx.cmd"),
+                Mock(returncode=0),
+            ]
+
+            result = _get_npx_command()
+
+            assert result == "npx.exe"
+            assert mock_run.call_count == 2
+
+    @patch("subprocess.run")
+    def test_get_npx_command_windows_cmd_missing(self, mock_run):
+        """Test npx command detection continues when npx.cmd is missing."""
+        from fastmcp.cli.cli import _get_npx_command
+
+        with patch("sys.platform", "win32"):
+            # Missing npx.cmd should not abort detection
+            mock_run.side_effect = [
+                FileNotFoundError("npx.cmd not found"),
                 Mock(returncode=0),
             ]
 

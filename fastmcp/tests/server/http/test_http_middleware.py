@@ -57,7 +57,9 @@ async def test_sse_app_with_custom_middleware():
     # Create custom middleware
     custom_middleware = [
         Middleware(
-            HeaderMiddleware, header_name="X-Custom-Header", header_value="test-value"
+            HeaderMiddleware,  # type: ignore[arg-type]
+            header_name="X-Custom-Header",
+            header_value="test-value",
         )
     ]
 
@@ -87,7 +89,9 @@ async def test_streamable_http_app_with_custom_middleware():
     # Create custom middleware
     custom_middleware = [
         Middleware(
-            HeaderMiddleware, header_name="X-Custom-Header", header_value="test-value"
+            HeaderMiddleware,  # type: ignore[arg-type]
+            header_name="X-Custom-Header",
+            header_value="test-value",
         )
     ]
 
@@ -116,7 +120,11 @@ async def test_create_sse_app_with_custom_middleware():
 
     # Create custom middleware
     custom_middleware = [
-        Middleware(RequestModifierMiddleware, key="modified_by", value="middleware")
+        Middleware(
+            RequestModifierMiddleware,  # type: ignore[arg-type]
+            key="modified_by",
+            value="middleware",
+        )
     ]
 
     # Add a test route
@@ -151,7 +159,11 @@ async def test_create_streamable_http_app_with_custom_middleware():
 
     # Create custom middleware
     custom_middleware = [
-        Middleware(RequestModifierMiddleware, key="modified_by", value="middleware")
+        Middleware(
+            RequestModifierMiddleware,  # type: ignore[arg-type]
+            key="modified_by",
+            value="middleware",
+        )
     ]
 
     # Add a test route
@@ -186,10 +198,14 @@ async def test_multiple_middleware_ordering():
     # Create multiple middleware
     custom_middleware = [
         Middleware(
-            HeaderMiddleware, header_name="X-First-Header", header_value="first"
+            HeaderMiddleware,  # type: ignore[arg-type]
+            header_name="X-First-Header",
+            header_value="first",
         ),
         Middleware(
-            HeaderMiddleware, header_name="X-Second-Header", header_value="second"
+            HeaderMiddleware,  # type: ignore[arg-type]
+            header_name="X-Second-Header",
+            header_value="second",
         ),
     ]
 

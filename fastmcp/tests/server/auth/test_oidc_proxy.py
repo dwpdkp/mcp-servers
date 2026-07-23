@@ -8,16 +8,17 @@ from httpx import Response
 from pydantic import AnyHttpUrl
 
 from fastmcp.server.auth.oidc_proxy import OIDCConfiguration, OIDCProxy
+from fastmcp.server.auth.providers.introspection import IntrospectionTokenVerifier
 from fastmcp.server.auth.providers.jwt import JWTVerifier
 
 TEST_ISSUER = "https://example.com"
 TEST_AUTHORIZATION_ENDPOINT = "https://example.com/authorize"
 TEST_TOKEN_ENDPOINT = "https://example.com/oauth/token"
 
-TEST_CONFIG_URL = "https://example.com/.well-known/openid-configuration"
+TEST_CONFIG_URL = AnyHttpUrl("https://example.com/.well-known/openid-configuration")
 TEST_CLIENT_ID = "test-client-id"
 TEST_CLIENT_SECRET = "test-client-secret"
-TEST_BASE_URL = "https://example.com:8000/"
+TEST_BASE_URL = AnyHttpUrl("https://example.com:8000/")
 
 
 # =============================================================================
@@ -306,7 +307,7 @@ class TestOIDCConfiguration:
         with pytest.raises(ValueError, match="Invalid URL for configuration metadata"):
             OIDCConfiguration.model_validate(valid_oidc_configuration_dict)
 
-    def test_explict_strict_with_bad_url_raises_error(
+    def test_explicit_strict_with_bad_url_raises_error(
         self, valid_oidc_configuration_dict
     ):
         """Test default configuration with explicit True strict setting and bad URL setting."""
@@ -358,14 +359,14 @@ class TestOIDCConfiguration:
 
 
 def validate_get_oidc_configuration(oidc_configuration, strict, timeout_seconds):
-    """Validate get_oidc_configuation call."""
+    """Validate get_oidc_configuration call."""
     with patch("httpx.get") as mock_get:
         mock_response = MagicMock(spec=Response)
         mock_response.json.return_value = oidc_configuration
         mock_get.return_value = mock_response
 
         config = OIDCConfiguration.get_oidc_configuration(
-            config_url=AnyHttpUrl(TEST_CONFIG_URL),
+            config_url=TEST_CONFIG_URL,
             strict=strict,
             timeout_seconds=timeout_seconds,
         )
@@ -375,7 +376,7 @@ def validate_get_oidc_configuration(oidc_configuration, strict, timeout_seconds)
         mock_get.assert_called_once()
 
         call_args = mock_get.call_args
-        assert call_args[0][0] == TEST_CONFIG_URL
+        assert str(call_args[0][0]) == str(TEST_CONFIG_URL)
 
         return call_args
 
@@ -414,7 +415,7 @@ class TestGetOIDCConfiguration:
             mock_get.return_value = mock_response
 
             OIDCConfiguration.get_oidc_configuration(
-                config_url=AnyHttpUrl(TEST_CONFIG_URL),
+                config_url=TEST_CONFIG_URL,
                 strict=False,
                 timeout_seconds=10,
             )
@@ -422,7 +423,7 @@ class TestGetOIDCConfiguration:
             mock_get.assert_called_once()
 
             call_args = mock_get.call_args
-            assert call_args[0][0] == TEST_CONFIG_URL
+            assert str(call_args[0][0]) == str(TEST_CONFIG_URL)
 
 
 def validate_proxy(mock_get, proxy, oidc_config):
@@ -430,13 +431,14 @@ def validate_proxy(mock_get, proxy, oidc_config):
     mock_get.assert_called_once()
 
     call_args = mock_get.call_args
-    assert str(call_args[0][0]) == TEST_CONFIG_URL
+    assert str(call_args[0][0]) == str(TEST_CONFIG_URL)
 
     assert proxy._upstream_authorization_endpoint == TEST_AUTHORIZATION_ENDPOINT
     assert proxy._upstream_token_endpoint == TEST_TOKEN_ENDPOINT
     assert proxy._upstream_client_id == TEST_CLIENT_ID
+    assert proxy._upstream_client_secret is not None
     assert proxy._upstream_client_secret.get_secret_value() == TEST_CLIENT_SECRET
-    assert str(proxy.base_url) == TEST_BASE_URL
+    assert str(proxy.base_url) == str(TEST_BASE_URL)
     assert proxy.oidc_config == oidc_config
 
 
@@ -458,6 +460,7 @@ class TestOIDCProxyInitialization:
                 client_id=TEST_CLIENT_ID,
                 client_secret=TEST_CLIENT_SECRET,
                 base_url=TEST_BASE_URL,
+                jwt_signing_key="test-secret",
             )
 
             validate_proxy(mock_get, proxy, oidc_config)
@@ -478,6 +481,7 @@ class TestOIDCProxyInitialization:
                 client_secret=TEST_CLIENT_SECRET,
                 base_url=TEST_BASE_URL,
                 timeout_seconds=12,
+                jwt_signing_key="test-secret",
             )
 
             validate_proxy(mock_get, proxy, oidc_config)
@@ -503,6 +507,7 @@ class TestOIDCProxyInitialization:
                 algorithm="RS256",
                 audience="oidc-proxy-test-audience",
                 required_scopes=["required", "scopes"],
+                jwt_signing_key="test-secret",
             )
 
             validate_proxy(mock_get, proxy, oidc_config)
@@ -529,6 +534,7 @@ class TestOIDCProxyInitialization:
                 client_secret=TEST_CLIENT_SECRET,
                 base_url=TEST_BASE_URL,
                 audience="oidc-proxy-test-audience",
+                jwt_signing_key="test-secret",
             )
 
             validate_proxy(mock_get, proxy, oidc_config)
@@ -556,6 +562,7 @@ class TestOIDCProxyInitialization:
                 redirect_path="/oidc/proxy",
                 allowed_client_redirect_uris=["http://localhost:*"],
                 token_endpoint_auth_method="client_secret_post",
+                jwt_signing_key="test-secret",
             )
 
             validate_proxy(mock_get, proxy, oidc_config)
@@ -582,6 +589,7 @@ class TestOIDCProxyInitialization:
                     client_id=TEST_CLIENT_ID,
                     client_secret=TEST_CLIENT_SECRET,
                     base_url=TEST_BASE_URL,
+                    jwt_signing_key="test-secret",
                 )
 
     def test_no_client_id_initialization_raises_error(
@@ -616,11 +624,14 @@ class TestOIDCProxyInitialization:
             )
             mock_get.return_value = oidc_config
 
-            with pytest.raises(ValueError, match="Missing required client secret"):
+            with pytest.raises(
+                ValueError,
+                match="Either client_secret or jwt_signing_key must be provided",
+            ):
                 OIDCProxy(
                     config_url=TEST_CONFIG_URL,
                     client_id=TEST_CLIENT_ID,
-                    client_secret=None,  # type: ignore
+                    client_secret=None,
                     base_url=TEST_BASE_URL,
                 )
 
@@ -643,3 +654,331 @@ class TestOIDCProxyInitialization:
                     client_secret=TEST_CLIENT_SECRET,
                     base_url=None,  # type: ignore
                 )
+
+    def test_custom_token_verifier_initialization(self, valid_oidc_configuration_dict):
+        """Test initialization with custom token verifier."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            # Create custom verifier for opaque tokens
+            custom_verifier = IntrospectionTokenVerifier(
+                introspection_url="https://example.com/oauth/introspect",
+                client_id="introspection-client",
+                client_secret="introspection-secret",
+                required_scopes=["custom", "scopes"],
+            )
+
+            proxy = OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                token_verifier=custom_verifier,
+                jwt_signing_key="test-secret",
+            )
+
+            validate_proxy(mock_get, proxy, oidc_config)
+
+            # Verify the custom verifier is used
+            assert proxy._token_validator is custom_verifier
+            assert isinstance(proxy._token_validator, IntrospectionTokenVerifier)
+
+            # Verify required_scopes are properly loaded from the custom verifier
+            assert proxy.required_scopes == ["custom", "scopes"]
+
+    def test_custom_token_verifier_with_algorithm_raises_error(
+        self, valid_oidc_configuration_dict
+    ):
+        """Test that providing algorithm with custom verifier raises error."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            custom_verifier = IntrospectionTokenVerifier(
+                introspection_url="https://example.com/oauth/introspect",
+                client_id="introspection-client",
+                client_secret="introspection-secret",
+            )
+
+            with pytest.raises(
+                ValueError,
+                match="Cannot specify 'algorithm' when providing a custom token_verifier",
+            ):
+                OIDCProxy(
+                    config_url=TEST_CONFIG_URL,
+                    client_id=TEST_CLIENT_ID,
+                    client_secret=TEST_CLIENT_SECRET,
+                    base_url=TEST_BASE_URL,
+                    token_verifier=custom_verifier,
+                    algorithm="RS256",  # This should cause an error
+                    jwt_signing_key="test-secret",
+                )
+
+    def test_custom_token_verifier_with_required_scopes_raises_error(
+        self, valid_oidc_configuration_dict
+    ):
+        """Test that providing required_scopes with custom verifier raises error."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            custom_verifier = IntrospectionTokenVerifier(
+                introspection_url="https://example.com/oauth/introspect",
+                client_id="introspection-client",
+                client_secret="introspection-secret",
+            )
+
+            with pytest.raises(
+                ValueError,
+                match="Cannot specify 'required_scopes' when providing a custom token_verifier",
+            ):
+                OIDCProxy(
+                    config_url=TEST_CONFIG_URL,
+                    client_id=TEST_CLIENT_ID,
+                    client_secret=TEST_CLIENT_SECRET,
+                    base_url=TEST_BASE_URL,
+                    token_verifier=custom_verifier,
+                    required_scopes=["read", "write"],  # This should cause an error
+                    jwt_signing_key="test-secret",
+                )
+
+    def test_custom_token_verifier_with_audience_allowed(
+        self, valid_oidc_configuration_dict
+    ):
+        """Test that providing audience with custom verifier is allowed (for OAuth flow)."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            custom_verifier = IntrospectionTokenVerifier(
+                introspection_url="https://example.com/oauth/introspect",
+                client_id="introspection-client",
+                client_secret="introspection-secret",
+            )
+
+            # This should NOT raise an error - audience is for OAuth flow
+            proxy = OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                token_verifier=custom_verifier,
+                audience="test-audience",  # Should be allowed for OAuth flow
+                jwt_signing_key="test-secret",
+            )
+
+            validate_proxy(mock_get, proxy, oidc_config)
+            assert proxy._extra_authorize_params == {"audience": "test-audience"}
+            assert proxy._extra_token_params == {"audience": "test-audience"}
+
+    def test_extra_authorize_params_initialization(self, valid_oidc_configuration_dict):
+        """Test extra authorize params initialization."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            proxy = OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                jwt_signing_key="test-secret",
+                extra_authorize_params={
+                    "prompt": "consent",
+                    "access_type": "offline",
+                },
+            )
+
+            validate_proxy(mock_get, proxy, oidc_config)
+
+            assert proxy._extra_authorize_params == {
+                "prompt": "consent",
+                "access_type": "offline",
+            }
+            # Token params should be empty since we didn't set them
+            assert proxy._extra_token_params == {}
+
+    def test_extra_token_params_initialization(self, valid_oidc_configuration_dict):
+        """Test extra token params initialization."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            proxy = OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                jwt_signing_key="test-secret",
+                extra_token_params={"custom_param": "custom_value"},
+            )
+
+            validate_proxy(mock_get, proxy, oidc_config)
+
+            # Authorize params should be empty since we didn't set them
+            assert proxy._extra_authorize_params == {}
+            assert proxy._extra_token_params == {"custom_param": "custom_value"}
+
+    def test_extra_params_merge_with_audience(self, valid_oidc_configuration_dict):
+        """Test that extra params merge with audience, with user params taking precedence."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            oidc_config = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            mock_get.return_value = oidc_config
+
+            proxy = OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                audience="original-audience",
+                jwt_signing_key="test-secret",
+                extra_authorize_params={
+                    "prompt": "consent",
+                    "audience": "overridden-audience",  # Should override the audience param
+                },
+                extra_token_params={"custom": "value"},
+            )
+
+            validate_proxy(mock_get, proxy, oidc_config)
+
+            # User's extra_authorize_params should override audience
+            assert proxy._extra_authorize_params == {
+                "audience": "overridden-audience",
+                "prompt": "consent",
+            }
+            # Token params should have both audience (from audience param) and custom
+            assert proxy._extra_token_params == {
+                "audience": "original-audience",
+                "custom": "value",
+            }
+
+
+class TestDiscoveryTimeout:
+    """Discovery timeout defaults and propagation (#4353, #4365)."""
+
+    def _construct_and_capture_timeout(self, valid_oidc_configuration_dict, construct):
+        """Construct a provider with mocked discovery, returning the timeout used."""
+        with patch(
+            "fastmcp.server.auth.oidc_proxy.OIDCConfiguration.get_oidc_configuration"
+        ) as mock_get:
+            mock_get.return_value = OIDCConfiguration.model_validate(
+                valid_oidc_configuration_dict
+            )
+            construct()
+            mock_get.assert_called_once()
+            return mock_get.call_args.kwargs["timeout_seconds"]
+
+    def test_oidc_proxy_defaults_to_bounded_timeout(
+        self, valid_oidc_configuration_dict
+    ):
+        """OIDCProxy applies a bounded discovery timeout when none is given."""
+        timeout = self._construct_and_capture_timeout(
+            valid_oidc_configuration_dict,
+            lambda: OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                jwt_signing_key="test-secret",
+            ),
+        )
+        assert timeout == 10
+
+    @pytest.mark.parametrize("timeout_seconds", [3, None])
+    def test_oidc_proxy_forwards_explicit_timeout(
+        self, valid_oidc_configuration_dict, timeout_seconds
+    ):
+        """An explicit timeout (including None as an escape hatch) is forwarded."""
+        timeout = self._construct_and_capture_timeout(
+            valid_oidc_configuration_dict,
+            lambda: OIDCProxy(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+                jwt_signing_key="test-secret",
+                timeout_seconds=timeout_seconds,
+            ),
+        )
+        assert timeout == timeout_seconds
+
+    def test_auth0_provider_defaults_to_bounded_timeout(
+        self, valid_oidc_configuration_dict
+    ):
+        """Auth0Provider exposes and defaults the discovery timeout."""
+        from fastmcp.server.auth.providers.auth0 import Auth0Provider
+
+        timeout = self._construct_and_capture_timeout(
+            valid_oidc_configuration_dict,
+            lambda: Auth0Provider(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                audience="test-audience",
+                base_url=TEST_BASE_URL,
+            ),
+        )
+        assert timeout == 10
+
+    def test_aws_cognito_provider_defaults_to_bounded_timeout(
+        self, valid_oidc_configuration_dict
+    ):
+        """AWSCognitoProvider exposes and defaults the discovery timeout."""
+        from fastmcp.server.auth.providers.aws import AWSCognitoProvider
+
+        timeout = self._construct_and_capture_timeout(
+            valid_oidc_configuration_dict,
+            lambda: AWSCognitoProvider(
+                user_pool_id="eu-central-1_XXXXXXXXX",
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+            ),
+        )
+        assert timeout == 10
+
+    def test_oci_provider_defaults_to_bounded_timeout(
+        self, valid_oidc_configuration_dict
+    ):
+        """OCIProvider exposes and defaults the discovery timeout."""
+        from fastmcp.server.auth.providers.oci import OCIProvider
+
+        timeout = self._construct_and_capture_timeout(
+            valid_oidc_configuration_dict,
+            lambda: OCIProvider(
+                config_url=TEST_CONFIG_URL,
+                client_id=TEST_CLIENT_ID,
+                client_secret=TEST_CLIENT_SECRET,
+                base_url=TEST_BASE_URL,
+            ),
+        )
+        assert timeout == 10

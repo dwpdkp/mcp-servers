@@ -1,6 +1,7 @@
 """Test log_level parameter support in FastMCP server."""
 
 import asyncio
+import socket
 from unittest.mock import AsyncMock, patch
 
 from fastmcp import FastMCP
@@ -14,7 +15,7 @@ class TestLogLevelParameter:
         server = FastMCP("TestServer")
 
         # Mock the stdio_server to avoid actual stdio operations
-        with patch("fastmcp.server.server.stdio_server") as mock_stdio:
+        with patch("fastmcp.server.mixins.transport.stdio_server") as mock_stdio:
             mock_stdio.return_value.__aenter__ = AsyncMock(
                 return_value=(AsyncMock(), AsyncMock())
             )
@@ -36,7 +37,9 @@ class TestLogLevelParameter:
         server = FastMCP("TestServer")
 
         # Mock uvicorn to avoid actual server start
-        with patch("fastmcp.server.server.uvicorn.Server") as mock_server_class:
+        with patch(
+            "fastmcp.server.mixins.transport.uvicorn.Server"
+        ) as mock_server_class:
             mock_instance = mock_server_class.return_value
             mock_instance.serve = AsyncMock()
 
@@ -47,6 +50,26 @@ class TestLogLevelParameter:
 
             # Verify serve was called
             mock_instance.serve.assert_called_once()
+
+    async def test_run_http_passes_sockets_to_uvicorn(self):
+        """Test that run_http_async forwards pre-bound sockets to Uvicorn."""
+        server = FastMCP("TestServer")
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            with patch(
+                "fastmcp.server.mixins.transport.uvicorn.Server"
+            ) as mock_server_class:
+                mock_instance = mock_server_class.return_value
+                mock_instance.serve = AsyncMock()
+
+                await server.run_http_async(
+                    show_banner=False,
+                    host="127.0.0.1",
+                    port=8000,
+                    sockets=[sock],
+                )
+
+                mock_instance.serve.assert_called_once_with(sockets=[sock])
 
     async def test_run_async_passes_log_level(self):
         """Test that run_async passes log_level to transport methods."""

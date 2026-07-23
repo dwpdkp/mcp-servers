@@ -5,12 +5,35 @@ import pytest
 from pydantic import AnyHttpUrl
 
 from fastmcp import FastMCP
-from fastmcp.server.auth import RemoteAuthProvider
+from fastmcp.server.auth import RemoteAuthProvider, TokenVerifier
+from fastmcp.server.auth.auth import AccessToken
 from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+
+
+class LegacyTokenVerifier(TokenVerifier):
+    """Mimics custom verifiers that still call the old positional super().__init__."""
+
+    def __init__(
+        self,
+        base_url: AnyHttpUrl | str | None = None,
+        required_scopes: list[str] | None = None,
+    ):
+        super().__init__(base_url, required_scopes)
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        return None
 
 
 class TestAuthProviderBase:
     """Test suite for base AuthProvider behaviors that apply to all auth providers."""
+
+    def test_token_verifier_preserves_legacy_positional_required_scopes(self):
+        """Legacy positional super().__init__(base_url, required_scopes) should keep working."""
+        verifier = LegacyTokenVerifier("https://my-server.com", ["read"])
+
+        assert verifier.base_url == AnyHttpUrl("https://my-server.com/")
+        assert verifier.required_scopes == ["read"]
+        assert verifier.resource_base_url is None
 
     @pytest.fixture
     def basic_remote_provider(self):
@@ -32,10 +55,10 @@ class TestAuthProviderBase:
     async def test_www_authenticate_header_points_to_base_url(
         self, basic_remote_provider
     ):
-        """Test that WWW-Authenticate header always points to base URL's .well-known.
+        """Test that WWW-Authenticate header points to RFC 9728-compliant metadata URL.
 
-        This test verifies the fix for issue #1685 where the WWW-Authenticate header
-        was incorrectly including the MCP path in the .well-known URL.
+        The WWW-Authenticate header includes the resource path per RFC 9728,
+        so clients can discover where the metadata is actually registered.
         """
         mcp = FastMCP("test-server", auth=basic_remote_provider)
         # Mount MCP at a non-root path
@@ -57,10 +80,10 @@ class TestAuthProviderBase:
             assert match is not None
             metadata_url = match.group(1)
 
-            # Should point to base URL, not include /api/v1/mcp
+            # The metadata URL includes the resource path per RFC 9728
             assert (
                 metadata_url
-                == "https://my-server.com/.well-known/oauth-protected-resource"
+                == "https://my-server.com/.well-known/oauth-protected-resource/api/v1/mcp"
             )
 
     async def test_automatic_resource_url_capture(self, basic_remote_provider):
@@ -77,8 +100,8 @@ class TestAuthProviderBase:
             transport=httpx.ASGITransport(app=mcp_http_app),
             base_url="https://my-server.com",
         ) as client:
-            # Get the .well-known metadata
-            response = await client.get("/.well-known/oauth-protected-resource")
+            # The .well-known metadata is at a path-aware location per RFC 9728
+            response = await client.get("/.well-known/oauth-protected-resource/mcp")
             assert response.status_code == 200
 
             data = response.json()
@@ -94,7 +117,10 @@ class TestAuthProviderBase:
             transport=httpx.ASGITransport(app=mcp_http_app),
             base_url="https://my-server.com",
         ) as client:
-            response = await client.get("/.well-known/oauth-protected-resource")
+            # The .well-known metadata includes the resource path per RFC 9728
+            response = await client.get(
+                "/.well-known/oauth-protected-resource/api/v2/services/mcp"
+            )
             assert response.status_code == 200
 
             data = response.json()

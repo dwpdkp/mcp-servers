@@ -1,13 +1,17 @@
-import json
+import functools
 from urllib.parse import quote
 
 import pytest
 from pydantic import BaseModel
 
-from fastmcp import Context
+from fastmcp import Context, FastMCP
 from fastmcp.resources import ResourceTemplate
-from fastmcp.resources.resource import FunctionResource
-from fastmcp.resources.template import match_uri_template
+from fastmcp.resources.function_resource import FunctionResource
+from fastmcp.resources.template import (
+    build_regex,
+    expand_uri_template,
+    match_uri_template,
+)
 
 
 class TestResourceTemplate:
@@ -103,7 +107,7 @@ class TestResourceTemplate:
         # This should fail - 'unknown' is not a function parameter
         with pytest.raises(
             ValueError,
-            match="Required function arguments .* must be a subset of the URI parameters",
+            match="Required function arguments .* must be a subset of the URI path parameters",
         ):
             ResourceTemplate.from_function(
                 fn=my_func,
@@ -131,7 +135,7 @@ class TestResourceTemplate:
         # This should fail - required param is not in URI
         with pytest.raises(
             ValueError,
-            match="Required function arguments .* must be a subset of the URI parameters",
+            match="Required function arguments .* must be a subset of the URI path parameters",
         ):
             ResourceTemplate.from_function(
                 fn=func_with_required,
@@ -156,7 +160,7 @@ class TestResourceTemplate:
         # This fails - missing one required param
         with pytest.raises(
             ValueError,
-            match="Required function arguments .* must be a subset of the URI parameters",
+            match="Required function arguments .* must be a subset of the URI path parameters",
         ):
             ResourceTemplate.from_function(
                 fn=multi_required,
@@ -167,8 +171,8 @@ class TestResourceTemplate:
     async def test_create_resource(self):
         """Test creating a resource from a template."""
 
-        def my_func(key: str, value: int) -> dict:
-            return {"key": key, "value": value}
+        def my_func(key: str, value: int) -> str:
+            return f"key={key}, value={value}"
 
         template = ResourceTemplate.from_function(
             fn=my_func,
@@ -182,10 +186,14 @@ class TestResourceTemplate:
         )
 
         assert isinstance(resource, FunctionResource)
-        content = await resource.read()
-        assert isinstance(content, str)
-        data = json.loads(content)
-        assert data == {"key": "foo", "value": 123}
+        # read() returns raw value from function
+        result = await resource.read()
+        assert result == "key=foo, value=123"
+
+        # _read() wraps in ResourceResult
+        resource_result = await resource._read()
+        assert len(resource_result.contents) == 1
+        assert resource_result.contents[0].content == "key=foo, value=123"
 
     async def test_async_text_resource(self):
         """Test creating a text resource from async function."""
@@ -205,8 +213,9 @@ class TestResourceTemplate:
         )
 
         assert isinstance(resource, FunctionResource)
-        content = await resource.read()
-        assert content == "Hello, world!"
+        # read() returns raw value
+        result = await resource.read()
+        assert result == "Hello, world!"
 
     async def test_async_binary_resource(self):
         """Test creating a binary resource from async function."""
@@ -226,8 +235,9 @@ class TestResourceTemplate:
         )
 
         assert isinstance(resource, FunctionResource)
-        content = await resource.read()
-        assert content == b"test"
+        # read() returns raw bytes
+        result = await resource.read()
+        assert result == b"test"
 
     async def test_basemodel_conversion(self):
         """Test handling of BaseModel types."""
@@ -251,9 +261,10 @@ class TestResourceTemplate:
         )
 
         assert isinstance(resource, FunctionResource)
-        content = await resource.read()
-        assert isinstance(content, str)
-        data = json.loads(content)
+        # read() returns raw BaseModel
+        result = await resource.read()
+        assert isinstance(result, MyModel)
+        data = result.model_dump()
         assert data == {"key": "foo", "value": 123}
 
     async def test_custom_type_conversion(self):
@@ -281,8 +292,10 @@ class TestResourceTemplate:
         )
 
         assert isinstance(resource, FunctionResource)
-        content = await resource.read()
-        assert content == '"hello"'
+        # read() returns raw CustomData object
+        result = await resource.read()
+        assert isinstance(result, CustomData)
+        assert str(result) == "hello"
 
     async def test_wildcard_param_can_create_resource(self):
         """Test that wildcard parameters are valid."""
@@ -391,8 +404,9 @@ class TestResourceTemplate:
         )
 
         assert isinstance(resource, FunctionResource)
-        content = await resource.read()
-        assert content == "X was foo"
+        # read() returns raw string from __call__
+        result = await resource.read()
+        assert result == "X was foo"
 
 
 class TestMatchUriTemplate:
@@ -677,8 +691,9 @@ class TestContextHandling:
             )
 
             assert isinstance(resource, FunctionResource)
-            content = await resource.read()
-            assert content == "42"
+            # read() returns the raw value
+            result = await resource.read()
+            assert result == "42"
 
     async def test_context_optional(self):
         """Test that context is optional when creating resources."""
@@ -693,8 +708,6 @@ class TestContextHandling:
         )
 
         # Even for optional context, we need to provide a context
-        from fastmcp import FastMCP
-
         mcp = FastMCP()
         context = Context(fastmcp=mcp)
 
@@ -705,5 +718,299 @@ class TestContextHandling:
             )
 
             assert isinstance(resource, FunctionResource)
-            content = await resource.read()
-            assert content == "42"
+            # read() returns the raw value
+            result = await resource.read()
+            assert result == "42"
+
+    async def test_context_with_functools_wraps_decorator(self):
+        """Regression test for #2524: decorated templates with Context should work."""
+
+        def custom_decorator(func):
+            @functools.wraps(func)
+            async def wrapper(*args, **kwargs):
+                return await func(*args, **kwargs)
+
+            return wrapper
+
+        @custom_decorator
+        async def decorated_template(ctx: Context, item_id: int) -> str:
+            assert isinstance(ctx, Context)
+            return f"item: {item_id}"
+
+        template = ResourceTemplate.from_function(
+            fn=decorated_template,
+            uri_template="test://{item_id}",
+            name="test",
+        )
+
+        mcp = FastMCP()
+        context = Context(fastmcp=mcp)
+
+        async with context:
+            resource = await template.create_resource("test://42", {"item_id": 42})
+            # read() returns the raw value
+            result = await resource.read()
+            assert result == "item: 42"
+
+
+class TestMalformedURITemplates:
+    """Test that malformed URI templates from remote servers don't crash."""
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "test://{1leading}/path",
+            "test://{123}/path",
+        ],
+        ids=[
+            "leading_digit",
+            "all_digits",
+        ],
+    )
+    def test_build_regex_returns_none_for_invalid_group_names(self, template: str):
+        assert build_regex(template) is None
+
+    def test_build_regex_normalizes_hyphens(self):
+        """Hyphens in param names produce valid regex with underscored groups."""
+        regex = build_regex("test://{user-id}/path")
+        assert regex is not None
+        match = regex.match("test://alice/path")
+        assert match is not None
+        assert match.group("user_id") == "alice"
+
+    def test_build_regex_returns_none_for_duplicate_group_names(self):
+        assert build_regex("test://{a}/{a}/path") is None
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            "test://{a}/{a}/path",
+            "test://{1leading}/path",
+        ],
+        ids=[
+            "duplicate_groups",
+            "leading_digit",
+        ],
+    )
+    def test_match_uri_template_returns_none_for_malformed_templates(
+        self, template: str
+    ):
+        assert match_uri_template("test://anything/path", template) is None
+
+    def test_match_uri_template_normalizes_hyphens(self):
+        """Hyphenated params match and return underscored keys."""
+        result = match_uri_template("test://alice/path", "test://{user-id}/path")
+        assert result == {"user_id": "alice"}
+
+    def test_resource_template_matches_with_hyphenated_params(self):
+        template = ResourceTemplate(
+            uri_template="test://{user-id}/path",
+            name="test",
+            parameters={},
+        )
+        result = template.matches("test://alice/path")
+        assert result == {"user_id": "alice"}
+
+    async def test_hyphenated_template_end_to_end(self):
+        """Register and read a resource with hyphenated URI param names."""
+        from fastmcp import FastMCP
+
+        mcp = FastMCP("test")
+
+        @mcp.resource("data://{user-id}/profile")
+        def get_profile(user_id: str) -> str:
+            return f"profile for {user_id}"
+
+        templates = await mcp.list_resource_templates()
+        assert len(templates) == 1
+        assert templates[0].uri_template == "data://{user-id}/profile"
+
+        result = await mcp.read_resource("data://alice/profile")
+        assert "profile for alice" in str(result)
+
+    def test_build_regex_normalizes_wildcard_hyphens(self):
+        """Wildcard params with hyphens also get underscored groups."""
+        regex = build_regex("files://{file-path*}")
+        assert regex is not None
+        match = regex.match("files://a/b/c")
+        assert match is not None
+        assert match.group("file_path") == "a/b/c"
+
+    def test_expand_uri_template_with_hyphens(self):
+        """expand_uri_template maps underscored params to hyphenated placeholders."""
+        result = expand_uri_template("data://{user-id}/profile", {"user_id": "alice"})
+        assert result == "data://alice/profile"
+
+    def test_query_param_does_not_clobber_path_param(self):
+        """If path and query have the same normalized name, path wins."""
+        result = match_uri_template(
+            "test://alice?user-id=bob", "test://{user-id}{?user-id}"
+        )
+        # path param should be 'alice', not clobbered by query 'bob'
+        assert result is not None
+        assert result["user_id"] == "alice"
+
+    def test_query_param_with_blank_value_is_preserved(self):
+        """Regression for #4056: blank query values (e.g. ?format=) should
+        not be silently dropped. parse_qs without keep_blank_values=True
+        elides empty values, which loses caller intent."""
+        result = match_uri_template(
+            "resource://data/42?format=", "resource://data/{id}{?format}"
+        )
+        assert result is not None
+        assert result == {"id": "42", "format": ""}
+
+    def test_query_param_with_blank_and_present_values(self):
+        """Mix of blank and non-blank query values are both surfaced."""
+        result = match_uri_template(
+            "resource://data/42?format=&verbose=true",
+            "resource://data/{id}{?format,verbose}",
+        )
+        assert result is not None
+        assert result == {"id": "42", "format": "", "verbose": "true"}
+
+    def test_from_function_rejects_hyphen_underscore_collision(self):
+        """Two raw param names that normalize to the same key are rejected."""
+
+        def handler(user_id: str) -> str:
+            return user_id
+
+        with pytest.raises(ValueError, match="both normalize to 'user_id'"):
+            ResourceTemplate.from_function(
+                fn=handler,
+                uri_template="test://{user-id}/{user_id}",
+                name="collision",
+            )
+
+    def test_build_regex_still_works_for_valid_templates(self):
+        regex = build_regex("test://{name}/{id}")
+        assert regex is not None
+        match = regex.match("test://foo/123")
+        assert match is not None
+        assert match.group("name") == "foo"
+        assert match.group("id") == "123"
+
+
+class TestExpandUriTemplate:
+    """Test expand_uri_template — the inverse of match_uri_template."""
+
+    @pytest.mark.parametrize(
+        "template, params, expected",
+        [
+            ("test://{x}", {"x": "foo"}, "test://foo"),
+            ("test://{x}/{y}", {"x": "foo", "y": "bar"}, "test://foo/bar"),
+            ("test://a/{x}/b", {"x": "mid"}, "test://a/mid/b"),
+        ],
+    )
+    def test_expand_simple_params(
+        self, template: str, params: dict[str, str], expected: str
+    ):
+        assert expand_uri_template(template, params) == expected
+
+    @pytest.mark.parametrize(
+        "template, params, expected",
+        [
+            ("test://{path*}", {"path": "a/b/c"}, "test://a/b/c"),
+            ("test://{path*}", {"path": "single"}, "test://single"),
+            ("test://pre/{rest*}", {"rest": "x/y"}, "test://pre/x/y"),
+            (
+                "test://{a*}/mid/{b*}",
+                {"a": "x/y", "b": "p/q"},
+                "test://x/y/mid/p/q",
+            ),
+            ("test://{x}/{path*}", {"x": "foo", "path": "a/b"}, "test://foo/a/b"),
+        ],
+    )
+    def test_expand_wildcard_params(
+        self, template: str, params: dict[str, str], expected: str
+    ):
+        assert expand_uri_template(template, params) == expected
+
+    def test_expand_query_params(self):
+        result = expand_uri_template(
+            "test://data{?format,verbose}",
+            {"format": "json", "verbose": "true"},
+        )
+        assert result in (
+            "test://data?format=json&verbose=true",
+            "test://data?verbose=true&format=json",
+        )
+
+    def test_expand_query_params_partial(self):
+        result = expand_uri_template(
+            "test://data{?format,verbose}",
+            {"format": "json"},
+        )
+        assert result == "test://data?format=json"
+
+    def test_expand_query_params_none(self):
+        result = expand_uri_template("test://data{?format,verbose}", {})
+        assert result == "test://data"
+
+    def test_expand_ignores_extra_params(self):
+        result = expand_uri_template("test://{x}", {"x": "foo", "unused": "bar"})
+        assert result == "test://foo"
+
+    @pytest.mark.parametrize(
+        "template, params, expected",
+        [
+            # Simple {var} matches a single segment, so "/" must be encoded.
+            (
+                "data://{path}/info",
+                {"path": "hello/world"},
+                "data://hello%2Fworld/info",
+            ),
+            ("test://{x}", {"x": "a b"}, "test://a%20b"),
+            ("test://{x}", {"x": "a?b"}, "test://a%3Fb"),
+            ("test://{x}", {"x": "a#b"}, "test://a%23b"),
+            # Wildcard {var*} may span segments, so "/" is preserved but other
+            # reserved characters are still encoded.
+            ("test://{path*}", {"path": "a/b/c"}, "test://a/b/c"),
+            ("test://{path*}", {"path": "a b/c"}, "test://a%20b/c"),
+        ],
+    )
+    def test_expand_encodes_reserved_characters(
+        self, template: str, params: dict[str, str], expected: str
+    ):
+        """Path values are percent-encoded so the result round-trips through match."""
+        assert expand_uri_template(template, params) == expected
+
+
+class TestMatchExpandRoundTrip:
+    """match_uri_template and expand_uri_template must agree on the template grammar."""
+
+    @pytest.mark.parametrize(
+        "template, uri",
+        [
+            ("test://{x}", "test://foo"),
+            ("test://{x}/{y}", "test://foo/bar"),
+            ("test://a/{x}/b", "test://a/mid/b"),
+            ("test://{path*}", "test://a/b/c"),
+            ("test://{path*}", "test://single"),
+            ("test://pre/{rest*}", "test://pre/x/y/z"),
+            ("test://{x}/{path*}", "test://foo/a/b/c"),
+        ],
+    )
+    def test_expand_then_match_is_identity(self, template: str, uri: str):
+        """Extracting params from a URI and expanding them back reproduces the URI."""
+        params = match_uri_template(uri, template)
+        assert params is not None
+        assert expand_uri_template(template, params) == uri
+
+    @pytest.mark.parametrize(
+        "template, params",
+        [
+            ("data://{path}/info", {"path": "hello/world"}),
+            ("test://{x}", {"x": "a b c"}),
+            ("test://{x}", {"x": "100%"}),
+            ("test://{x}/{y}", {"x": "a/b", "y": "c?d"}),
+            ("test://{path*}", {"path": "a/b/c"}),
+            ("test://pre/{rest*}", {"rest": "x y/z"}),
+        ],
+    )
+    def test_match_then_expand_recovers_params(
+        self, template: str, params: dict[str, str]
+    ):
+        """Expanding params and matching them back reproduces the original values."""
+        uri = expand_uri_template(template, params)
+        assert match_uri_template(uri, template) == params

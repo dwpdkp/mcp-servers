@@ -1,13 +1,13 @@
 name: Update SDK Documentation
 
-# This workflow runs on merges to main to automatically update SDK docs
-# by creating a PR when changes are needed.
+# Regenerates SDK docs on pushes to main and opens a long-lived PR
+# with the changes, so contributor PRs stay clean.
 
 on:
   push:
     branches: ["main"]
     paths:
-      - "src/**"
+      - "fastmcp_slim/**"
       - "pyproject.toml"
   workflow_dispatch:
 
@@ -21,17 +21,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
-
       - name: Generate Marvin App token
         id: marvin-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.MARVIN_APP_ID }}
           private-key: ${{ secrets.MARVIN_APP_PRIVATE_KEY }}
 
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ steps.marvin-token.outputs.token }}
+
       - name: Install uv
-        uses: astral-sh/setup-uv@v6
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
@@ -40,15 +42,13 @@ jobs:
         run: uv sync --python 3.12
 
       - name: Install just
-        uses: extractions/setup-just@v3
+        uses: extractions/setup-just@v4
 
       - name: Generate SDK documentation
-        run: |
-          echo "🔄 Generating SDK documentation..."
-          just api-ref-all
+        run: just api-ref-all
 
       - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ steps.marvin-token.outputs.token }}
           commit-message: "chore: Update SDK documentation"
@@ -67,8 +67,3 @@ jobs:
           delete-branch: true
           author: "marvin-context-protocol[bot] <225465937+marvin-context-protocol[bot]@users.noreply.github.com>"
           committer: "marvin-context-protocol[bot] <225465937+marvin-context-protocol[bot]@users.noreply.github.com>"
-
-      - name: Summary
-        run: |
-          echo "✅ SDK documentation generation workflow completed"
-          echo "PR will be created if there are changes, or closed if documentation is already up to date"

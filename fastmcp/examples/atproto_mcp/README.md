@@ -13,7 +13,7 @@ This example demonstrates a FastMCP server that provides tools and resources for
 ### Tools (Actions)
 
 - **post**: Create posts with rich features (text, images, quotes, replies, links, mentions)
-- **create_thread**: Post multi-part threads with automatic linking
+- **create_thread**: Post multipart threads with automatic linking
 - **search**: Search for posts by query
 - **follow**: Follow users by handle
 - **like**: Like posts by URI
@@ -91,7 +91,7 @@ async def demo():
         # Rich text with links and mentions
         await client.call_tool("post", {
             "text": "Check out FastMCP by @alternatebuild.dev",
-            "links": [{"text": "FastMCP", "url": "https://github.com/jlowin/fastmcp"}],
+            "links": [{"text": "FastMCP", "url": "https://github.com/PrefectHQ/fastmcp"}],
             "mentions": [{"handle": "alternatebuild.dev", "display_text": "@alternatebuild.dev"}]
         })
         

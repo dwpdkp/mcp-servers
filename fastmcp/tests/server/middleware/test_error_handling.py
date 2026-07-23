@@ -6,6 +6,9 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from mcp import McpError
 
+from fastmcp import FastMCP
+from fastmcp.client import Client
+from fastmcp.exceptions import NotFoundError, ToolError
 from fastmcp.server.middleware.error_handling import (
     ErrorHandlingMiddleware,
     RetryMiddleware,
@@ -100,76 +103,95 @@ class TestErrorHandlingMiddleware:
 
         assert "Error in error callback: callback error" in caplog.text
 
-    def test_transform_error_mcp_error(self):
+    def test_transform_error_mcp_error(self, mock_context):
         """Test that MCP errors are not transformed."""
         middleware = ErrorHandlingMiddleware()
         from mcp.types import ErrorData
 
         error = McpError(ErrorData(code=-32001, message="test error"))
 
-        result = middleware._transform_error(error)
+        result = middleware._transform_error(error, mock_context)
 
         assert result is error
 
-    def test_transform_error_disabled(self):
+    def test_transform_error_disabled(self, mock_context):
         """Test error transformation when disabled."""
         middleware = ErrorHandlingMiddleware(transform_errors=False)
         error = ValueError("test error")
 
-        result = middleware._transform_error(error)
+        result = middleware._transform_error(error, mock_context)
 
         assert result is error
 
-    def test_transform_error_value_error(self):
+    def test_transform_error_value_error(self, mock_context):
         """Test transforming ValueError."""
         middleware = ErrorHandlingMiddleware()
         error = ValueError("test error")
 
-        result = middleware._transform_error(error)
+        result = middleware._transform_error(error, mock_context)
 
         assert isinstance(result, McpError)
         assert result.error.code == -32602
         assert "Invalid params: test error" in result.error.message
 
-    def test_transform_error_file_not_found(self):
-        """Test transforming FileNotFoundError."""
+    def test_transform_error_not_found_for_resource_method(self):
+        """Test that not-found errors use -32002 for resource methods."""
         middleware = ErrorHandlingMiddleware()
-        error = FileNotFoundError("test error")
+        resource_context = MagicMock(spec=MiddlewareContext)
+        resource_context.method = "resources/read"
 
-        result = middleware._transform_error(error)
+        for error in [
+            FileNotFoundError("test error"),
+            NotFoundError("test error"),
+        ]:
+            result = middleware._transform_error(error, resource_context)
 
-        assert isinstance(result, McpError)
-        assert result.error.code == -32001
-        assert "Resource not found: test error" in result.error.message
+            assert isinstance(result, McpError)
+            assert result.error.code == -32002
+            assert "Resource not found: test error" in result.error.message
 
-    def test_transform_error_permission_error(self):
+    def test_transform_error_not_found_for_non_resource_method(self, mock_context):
+        """Test that not-found errors use -32001 for non-resource methods."""
+        middleware = ErrorHandlingMiddleware()
+
+        for error in [
+            FileNotFoundError("test error"),
+            NotFoundError("test error"),
+        ]:
+            result = middleware._transform_error(error, mock_context)
+
+            assert isinstance(result, McpError)
+            assert result.error.code == -32001
+            assert "Not found: test error" in result.error.message
+
+    def test_transform_error_permission_error(self, mock_context):
         """Test transforming PermissionError."""
         middleware = ErrorHandlingMiddleware()
         error = PermissionError("test error")
 
-        result = middleware._transform_error(error)
+        result = middleware._transform_error(error, mock_context)
 
         assert isinstance(result, McpError)
         assert result.error.code == -32000
         assert "Permission denied: test error" in result.error.message
 
-    def test_transform_error_timeout_error(self):
+    def test_transform_error_timeout_error(self, mock_context):
         """Test transforming TimeoutError."""
         middleware = ErrorHandlingMiddleware()
         error = TimeoutError("test error")
 
-        result = middleware._transform_error(error)
+        result = middleware._transform_error(error, mock_context)
 
         assert isinstance(result, McpError)
         assert result.error.code == -32000
         assert "Request timeout: test error" in result.error.message
 
-    def test_transform_error_generic(self):
+    def test_transform_error_generic(self, mock_context):
         """Test transforming generic error."""
         middleware = ErrorHandlingMiddleware()
         error = RuntimeError("test error")
 
-        result = middleware._transform_error(error)
+        result = middleware._transform_error(error, mock_context)
 
         assert isinstance(result, McpError)
         assert result.error.code == -32603
@@ -197,6 +219,22 @@ class TestErrorHandlingMiddleware:
         assert exc_info.value.error.code == -32602
         assert "Invalid params: test error" in exc_info.value.error.message
         assert "Error in test_method: ValueError: test error" in caplog.text
+
+    async def test_on_message_error_transform_tool_error(self, mock_context, caplog):
+        """Test error handling with transformation and cause type."""
+        middleware = ErrorHandlingMiddleware()
+        tool_error = ToolError("test error")
+        tool_error.__cause__ = ValueError()
+        mock_call_next = AsyncMock(side_effect=tool_error)
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(McpError) as exc_info:
+                await middleware.on_message(mock_context, mock_call_next)
+
+        assert isinstance(exc_info.value, McpError)
+        assert exc_info.value.error.code == -32602
+        assert "Invalid params: test error" in exc_info.value.error.message
+        assert "Error in test_method: ToolError: test error" in caplog.text
 
     def test_get_error_stats(self, mock_context):
         """Test getting error statistics."""
@@ -258,6 +296,32 @@ class TestRetryMiddleware:
 
         assert middleware._should_retry(ValueError()) is False
         assert middleware._should_retry(RuntimeError()) is False
+
+    def test_should_retry_checks_cause_chain(self):
+        """Retry should match on __cause__ since FastMCP wraps tool errors.
+
+        When a tool raises ConnectionError, FastMCP catches it and raises
+        ToolError(...) from ConnectionError.  The middleware must check
+        __cause__ to detect the retryable original exception.
+        """
+        middleware = RetryMiddleware(retry_exceptions=(ConnectionError,))
+
+        # Direct ConnectionError — should retry
+        assert middleware._should_retry(ConnectionError()) is True
+
+        # ToolError wrapping ConnectionError — should also retry
+        wrapped = ToolError("Error calling tool")
+        wrapped.__cause__ = ConnectionError("conn refused")
+        assert middleware._should_retry(wrapped) is True
+
+        # ToolError wrapping ValueError — should NOT retry
+        wrong_cause = ToolError("Error calling tool")
+        wrong_cause.__cause__ = ValueError("bad input")
+        assert middleware._should_retry(wrong_cause) is False
+
+        # ToolError with no cause — should NOT retry
+        no_cause = ToolError("Error calling tool")
+        assert middleware._should_retry(no_cause) is False
 
     def test_calculate_delay(self):
         """Test delay calculation."""
@@ -328,8 +392,6 @@ class TestRetryMiddleware:
 @pytest.fixture
 def error_handling_server():
     """Create a FastMCP server specifically for error handling middleware tests."""
-    from fastmcp import FastMCP
-
     mcp = FastMCP("ErrorHandlingTestServer")
 
     @mcp.tool
@@ -381,8 +443,6 @@ class TestErrorHandlingMiddlewareIntegration:
         self, error_handling_server, caplog
     ):
         """Test that error handling middleware logs real errors from tools."""
-        from fastmcp.client import Client
-
         error_handling_server.add_middleware(ErrorHandlingMiddleware())
 
         with caplog.at_level(logging.ERROR):
@@ -406,8 +466,6 @@ class TestErrorHandlingMiddlewareIntegration:
         self, error_handling_server
     ):
         """Test that error handling middleware accurately tracks error statistics."""
-        from fastmcp.client import Client
-
         error_middleware = ErrorHandlingMiddleware()
         error_handling_server.add_middleware(error_middleware)
 
@@ -421,12 +479,12 @@ class TestErrorHandlingMiddlewareIntegration:
                 with pytest.raises(Exception):
                     await client.call_tool("failing_operation", {"error_type": "file"})
 
-            # Try some intermittent operations (some may succeed)
-            for _ in range(5):
-                try:
-                    await client.call_tool("intermittent_operation", {"fail_rate": 0.8})
-                except Exception:
-                    pass  # Expected failures
+        # Try some intermittent operations (some may succeed)
+        for _ in range(5):
+            try:
+                await client.call_tool("intermittent_operation", {"fail_rate": 0.8})
+            except Exception:
+                pass  # Expected failures
 
         # Check error statistics
         stats = error_middleware.get_error_stats()
@@ -439,8 +497,6 @@ class TestErrorHandlingMiddlewareIntegration:
         self, error_handling_server, caplog
     ):
         """Test error handling middleware with mix of successful and failed operations."""
-        from fastmcp.client import Client
-
         error_handling_server.add_middleware(ErrorHandlingMiddleware())
 
         with caplog.at_level(logging.ERROR):
@@ -465,8 +521,6 @@ class TestErrorHandlingMiddlewareIntegration:
         self, error_handling_server
     ):
         """Test error handling middleware with custom error callback."""
-        from fastmcp.client import Client
-
         captured_errors = []
 
         def error_callback(error, context):
@@ -500,8 +554,6 @@ class TestErrorHandlingMiddlewareIntegration:
         self, error_handling_server
     ):
         """Test error transformation functionality."""
-        from fastmcp.client import Client
-
         error_handling_server.add_middleware(
             ErrorHandlingMiddleware(transform_errors=True)
         )
@@ -511,71 +563,74 @@ class TestErrorHandlingMiddlewareIntegration:
             with pytest.raises(Exception) as exc_info:
                 await client.call_tool("failing_operation", {"error_type": "value"})
 
-            # Error should still exist (may be wrapped by FastMCP)
-            assert exc_info.value is not None
+        # Error should still exist (may be wrapped by FastMCP)
+        assert exc_info.value is not None
 
 
 class TestRetryMiddlewareIntegration:
     """Integration tests for retry middleware with real FastMCP server."""
 
-    async def test_retry_middleware_with_transient_failures(
-        self, error_handling_server, caplog
-    ):
-        """Test retry middleware with operations that have transient failures."""
-        from fastmcp.client import Client
+    async def test_retry_actually_retries_through_server_pipeline(self):
+        """Retry middleware should retry tool calls that raise retryable errors.
 
-        # Configure retry middleware to retry connection errors
-        error_handling_server.add_middleware(
+        FastMCP wraps tool exceptions as ToolError(...) from <original>,
+        so the middleware must check __cause__ to detect retryable errors.
+        This test verifies the full pipeline works by counting call attempts.
+        """
+        call_count = 0
+        server = FastMCP("RetryTest")
+        server.add_middleware(
             RetryMiddleware(
                 max_retries=3,
-                base_delay=0.01,  # Very short delay for testing
+                base_delay=0.01,
                 retry_exceptions=(ConnectionError,),
             )
         )
 
-        with caplog.at_level(logging.WARNING):
-            async with Client(error_handling_server) as client:
-                # This operation fails intermittently - try several times
-                success_count = 0
-                for _ in range(5):
-                    try:
-                        await client.call_tool(
-                            "intermittent_operation", {"fail_rate": 0.7}
-                        )
-                        success_count += 1
-                    except Exception:
-                        pass  # Some failures expected even with retries
+        @server.tool
+        def fails_then_succeeds() -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count < 3:
+                raise ConnectionError("transient failure")
+            return "success"
 
-        # Should have some retry log messages
-        # Note: Retry logs might not appear if the underlying errors are wrapped by FastMCP
-        # The key is that some operations should succeed due to retries
+        async with Client(server) as client:
+            result = await client.call_tool("fails_then_succeeds")
+            assert result.data == "success"
 
-    async def test_retry_middleware_with_permanent_failures(
-        self, error_handling_server
-    ):
-        """Test that retry middleware doesn't retry non-retryable errors."""
-        from fastmcp.client import Client
+        # Tool should have been called 3 times: 2 failures + 1 success
+        assert call_count == 3
 
-        # Configure retry middleware for connection errors only
-        error_handling_server.add_middleware(
+    async def test_retry_middleware_with_permanent_failures(self):
+        """A tool error whose cause is not in ``retry_exceptions`` should
+        fail on the first attempt — no retries."""
+        call_count = 0
+        server = FastMCP("RetryPermanentFailuresTest")
+        server.add_middleware(
             RetryMiddleware(
                 max_retries=3, base_delay=0.01, retry_exceptions=(ConnectionError,)
             )
         )
 
-        async with Client(error_handling_server) as client:
-            # Value errors should not be retried
-            with pytest.raises(Exception):
-                await client.call_tool("failing_operation", {"error_type": "value"})
+        @server.tool
+        def always_fails() -> str:
+            nonlocal call_count
+            call_count += 1
+            raise ValueError("permanent failure")
 
-            # Should fail immediately without retries
+        async with Client(server) as client:
+            with pytest.raises(Exception):
+                await client.call_tool("always_fails", {})
+
+        assert call_count == 1
+
+        # Should fail immediately without retries
 
     async def test_combined_error_handling_and_retry_middleware(
         self, error_handling_server, caplog
     ):
         """Test error handling and retry middleware working together."""
-        from fastmcp.client import Client
-
         # Add both middleware
         error_handling_server.add_middleware(ErrorHandlingMiddleware())
         error_handling_server.add_middleware(

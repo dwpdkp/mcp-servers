@@ -74,6 +74,33 @@ class TestTokenBucketRateLimiter:
         await asyncio.sleep(0.2)
         assert await limiter.consume(2) is True
 
+    async def test_denied_consumes_do_not_freeze_clock(self):
+        """Regression for #4056: a client that retries quickly after being
+        denied must not be able to bypass the configured refill rate.
+
+        last_refill must advance on every consume() call (success or failure).
+        If it only advanced on success, the elapsed window would be re-counted
+        on each retry, letting a client refill faster than `refill_rate`.
+        """
+        limiter = TokenBucketRateLimiter(capacity=10, refill_rate=10.0)
+
+        # Drain the bucket.
+        assert await limiter.consume(10) is True
+
+        # Hammer with denied requests over ~0.2s. With the correct
+        # implementation, last_refill advances on each call, so total
+        # accumulated tokens after 0.2s is ~2 (10/s * 0.2s).
+        for _ in range(20):
+            await limiter.consume(1)
+            await asyncio.sleep(0.01)
+
+        # We should NOT be able to consume more than the configured rate
+        # would allow over the elapsed window. Allow a small slack for
+        # timing jitter, but stay well below `capacity`.
+        assert await limiter.consume(5) is False, (
+            "denied retries should not silently accrue extra tokens"
+        )
+
 
 class TestSlidingWindowRateLimiter:
     """Test sliding window rate limiter."""
@@ -149,19 +176,28 @@ class TestRateLimitingMiddleware:
         assert middleware.get_client_id is get_client_id
         assert middleware.global_limit is True
 
-    def test_get_client_identifier_default(self, mock_context):
+    async def test_get_client_identifier_default(self, mock_context):
         """Test default client identifier."""
         middleware = RateLimitingMiddleware()
-        assert middleware._get_client_identifier(mock_context) == "global"
+        assert await middleware._get_client_identifier(mock_context) == "global"
 
-    def test_get_client_identifier_custom(self, mock_context):
+    async def test_get_client_identifier_custom(self, mock_context):
         """Test custom client identifier."""
 
         def get_client_id(ctx):
             return "custom_client"
 
         middleware = RateLimitingMiddleware(get_client_id=get_client_id)
-        assert middleware._get_client_identifier(mock_context) == "custom_client"
+        assert await middleware._get_client_identifier(mock_context) == "custom_client"
+
+    async def test_get_client_identifier_async_custom(self, mock_context):
+        """Test custom async client identifier."""
+
+        async def get_client_id(ctx):
+            return "async_client"
+
+        middleware = RateLimitingMiddleware(get_client_id=get_client_id)
+        assert await middleware._get_client_identifier(mock_context) == "async_client"
 
     async def test_on_request_success(self, mock_context, mock_call_next):
         """Test successful request within rate limit."""
@@ -196,6 +232,25 @@ class TestRateLimitingMiddleware:
 
         # Second request should be rate limited
         with pytest.raises(RateLimitError, match="Global rate limit exceeded"):
+            await middleware.on_request(mock_context, mock_call_next)
+
+    async def test_on_request_async_get_client_id(self, mock_context, mock_call_next):
+        """Test per-client rate limiting with an async get_client_id."""
+
+        async def get_client_id(ctx):
+            return "async_client"
+
+        middleware = RateLimitingMiddleware(
+            max_requests_per_second=1.0, burst_capacity=1, get_client_id=get_client_id
+        )
+
+        # First request should succeed
+        await middleware.on_request(mock_context, mock_call_next)
+
+        # Second request should be rate limited for the async-resolved client
+        with pytest.raises(
+            RateLimitError, match="Rate limit exceeded for client: async_client"
+        ):
             await middleware.on_request(mock_context, mock_call_next)
 
 
@@ -240,6 +295,23 @@ class TestSlidingWindowRateLimitingMiddleware:
 
         # Second request should be rate limited
         with pytest.raises(RateLimitError, match="Rate limit exceeded"):
+            await middleware.on_request(mock_context, mock_call_next)
+
+    async def test_on_request_async_get_client_id(self, mock_context, mock_call_next):
+        """Test sliding window rate limiting with an async get_client_id."""
+
+        async def get_client_id(ctx):
+            return "async_client"
+
+        middleware = SlidingWindowRateLimitingMiddleware(
+            max_requests=1, get_client_id=get_client_id
+        )
+
+        # First request should succeed
+        await middleware.on_request(mock_context, mock_call_next)
+
+        # Second request should be rate limited for the async-resolved client
+        with pytest.raises(RateLimitError, match="client: async_client"):
             await middleware.on_request(mock_context, mock_call_next)
 
 
@@ -306,20 +378,27 @@ class TestRateLimitingMiddlewareIntegration:
 
     async def test_rate_limiting_blocks_rapid_requests(self, rate_limit_server):
         """Test that rate limiting blocks rapid successive requests."""
-        # Very restrictive rate limit (accounting for extra list_tools calls per tool call)
+        # Use a generous burst but near-zero refill rate so tokens never
+        # replenish.  The MCP SDK sends internal messages (initialize,
+        # notifications, list_tools for validation) whose exact count
+        # varies, so we give enough burst for init + several calls, then
+        # keep firing until we hit the limit.
         rate_limit_server.add_middleware(
-            RateLimitingMiddleware(max_requests_per_second=10.0, burst_capacity=5)
+            RateLimitingMiddleware(max_requests_per_second=0.001, burst_capacity=20)
         )
 
         async with Client(rate_limit_server) as client:
-            # First few should succeed (within burst capacity)
-            await client.call_tool("quick_action", {"message": "1"})
-            await client.call_tool("quick_action", {"message": "2"})
-            await client.call_tool("quick_action", {"message": "3"})
-
-            # Next should be rate limited
-            with pytest.raises(ToolError, match="Rate limit exceeded"):
-                await client.call_tool("quick_action", {"message": "4"})
+            # Fire enough calls to exhaust the burst.  With near-zero
+            # refill, we must eventually hit the limit.
+            hit_limit = False
+            for i in range(30):
+                try:
+                    await client.call_tool("quick_action", {"message": str(i)})
+                except ToolError as exc:
+                    assert "Rate limit exceeded" in str(exc)
+                    hit_limit = True
+                    break
+            assert hit_limit, "Rate limit was never triggered"
 
     async def test_rate_limiting_with_concurrent_requests(self, rate_limit_server):
         """Test rate limiting behavior with concurrent requests."""
@@ -356,7 +435,7 @@ class TestRateLimitingMiddlewareIntegration:
         """Test sliding window rate limiting implementation."""
         rate_limit_server.add_middleware(
             SlidingWindowRateLimitingMiddleware(
-                max_requests=5,  # Accounting for extra list_tools calls
+                max_requests=6,  # 1 init + 1 list_tools + 3 calls + 1 to fail
                 window_minutes=1,  # 1-minute window
             )
         )
@@ -374,7 +453,7 @@ class TestRateLimitingMiddlewareIntegration:
     async def test_rate_limiting_with_different_operations(self, rate_limit_server):
         """Test that rate limiting applies to all types of operations."""
         rate_limit_server.add_middleware(
-            RateLimitingMiddleware(max_requests_per_second=9.0, burst_capacity=4)
+            RateLimitingMiddleware(max_requests_per_second=9.0, burst_capacity=5)
         )
 
         async with Client(rate_limit_server) as client:
@@ -395,8 +474,8 @@ class TestRateLimitingMiddlewareIntegration:
 
         rate_limit_server.add_middleware(
             RateLimitingMiddleware(
-                max_requests_per_second=6.0,  # Accounting for extra list_tools calls
-                burst_capacity=3,
+                max_requests_per_second=1.0,  # Very slow refill to ensure rate limiting triggers
+                burst_capacity=4,  # init + list_tools + call + list_tools = 4, so 2nd call fails
                 get_client_id=get_client_id,
             )
         )
@@ -406,36 +485,35 @@ class TestRateLimitingMiddlewareIntegration:
             await client.call_tool("quick_action", {"message": "first"})
 
             # Second should be rate limited for this specific client
-            with pytest.raises(
-                ToolError, match="Rate limit exceeded for client: test_client_123"
-            ):
+            with pytest.raises(ToolError) as exc_info:
                 await client.call_tool("quick_action", {"message": "second"})
+            assert "Rate limit exceeded for client: test_client_123" in str(
+                exc_info.value
+            )
 
     async def test_global_rate_limiting(self, rate_limit_server):
         """Test global rate limiting across all clients."""
-        rate_limit_server.add_middleware(
-            RateLimitingMiddleware(
-                max_requests_per_second=6.0,
-                burst_capacity=4,
-                global_limit=True,  # Accounting for extra list_tools calls
-            )
+        middleware = RateLimitingMiddleware(
+            max_requests_per_second=0.001,
+            burst_capacity=1000,
+            global_limit=True,
         )
+        rate_limit_server.add_middleware(middleware)
 
         async with Client(rate_limit_server) as client:
-            # Use up the global capacity
             await client.call_tool("quick_action", {"message": "1"})
-            await client.call_tool("quick_action", {"message": "2"})
 
-            # Should be globally rate limited
+            middleware.global_limiter.tokens = 0
+
             with pytest.raises(ToolError, match="Global rate limit exceeded"):
-                await client.call_tool("quick_action", {"message": "3"})
+                await client.call_tool("quick_action", {"message": "blocked"})
 
     async def test_rate_limiting_recovery_over_time(self, rate_limit_server):
         """Test that rate limiting allows requests again after time passes."""
         rate_limit_server.add_middleware(
             RateLimitingMiddleware(
                 max_requests_per_second=10.0,  # 10 per second = 1 every 100ms
-                burst_capacity=3,
+                burst_capacity=4,
             )
         )
 

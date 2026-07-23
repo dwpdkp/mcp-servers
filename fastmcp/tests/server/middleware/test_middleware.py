@@ -6,10 +6,9 @@ import mcp.types
 import pytest
 
 from fastmcp import Client, FastMCP
-from fastmcp.exceptions import ToolError
 from fastmcp.server.context import Context
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
-from fastmcp.tools.tool import ToolResult
+from fastmcp.tools.base import ToolResult
 
 
 @dataclass
@@ -293,6 +292,17 @@ class TestMiddlewareHooks:
         result = list_prompts_calls[0].result
         assert isinstance(result, list)
 
+    async def test_initialize(
+        self, mcp_server: FastMCP, recording_middleware: RecordingMiddleware
+    ):
+        async with Client(mcp_server) as client:
+            await client.ping()
+
+        assert recording_middleware.assert_called(at_least=1)
+        assert recording_middleware.assert_called(hook="on_message", at_least=1)
+        assert recording_middleware.assert_called(hook="on_request", at_least=1)
+        assert recording_middleware.assert_called(hook="on_initialize", at_least=1)
+
     async def test_list_tools_filtering_middleware(self):
         """Test that middleware can filter tools."""
 
@@ -428,13 +438,19 @@ class TestMiddlewareHooks:
             ):
                 # modify argument
                 if context.message.name == "add":
-                    context.message.arguments["a"] += 100  # type: ignore
+                    assert context.message.arguments is not None
+                    args = context.message.arguments
+                    assert isinstance(args["a"], int)
+                    args["a"] += 100
 
                 result = await call_next(context)
 
                 # modify result
                 if context.message.name == "add":
-                    result.structured_content["result"] += 5  # type: ignore
+                    assert result.structured_content is not None
+                    content = result.structured_content
+                    assert isinstance(content["result"], int)
+                    content["result"] += 5
 
                 return result
 
@@ -443,452 +459,163 @@ class TestMiddlewareHooks:
         async with Client(server) as client:
             result = await client.call_tool("add", {"a": 1, "b": 2})
 
-        assert result.structured_content["result"] == 108  # type: ignore
+        assert isinstance(result.structured_content["result"], int)
+        assert result.structured_content["result"] == 108
 
 
-class TestNestedMiddlewareHooks:
-    @pytest.fixture
-    @staticmethod
-    def nested_middleware():
-        return RecordingMiddleware(name="nested_middleware")
+class TestApplyMiddlewareParameter:
+    """Tests for run_middleware parameter on execution methods."""
 
-    @pytest.fixture
-    def nested_mcp_server(self, nested_middleware: RecordingMiddleware):
-        mcp = FastMCP(name="Nested MCP")
+    async def test_call_tool_with_run_middleware_true(self):
+        """Middleware is applied when run_middleware=True (default)."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
 
-        @mcp.tool
+        @server.tool
         def add(a: int, b: int) -> int:
             return a + b
 
-        @mcp.resource("resource://test")
+        server.add_middleware(recording)
+
+        result = await server.call_tool("add", {"a": 1, "b": 2})
+
+        assert result.structured_content["result"] == 3  # type: ignore[union-attr,index]  # ty:ignore[not-subscriptable]
+        assert recording.assert_called(hook="on_call_tool", times=1)
+
+    async def test_call_tool_with_run_middleware_false(self):
+        """Middleware is NOT applied when run_middleware=False."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
+
+        @server.tool
+        def add(a: int, b: int) -> int:
+            return a + b
+
+        server.add_middleware(recording)
+
+        result = await server.call_tool("add", {"a": 1, "b": 2}, run_middleware=False)
+
+        assert result.structured_content["result"] == 3  # type: ignore[union-attr,index]  # ty:ignore[not-subscriptable]
+        # Middleware should not have been called
+        assert len(recording.calls) == 0
+
+    async def test_read_resource_with_run_middleware_true(self):
+        """Middleware is applied when run_middleware=True (default)."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
+
+        @server.resource("resource://test")
         def test_resource() -> str:
-            return "test resource"
+            return "test content"
 
-        @mcp.resource("resource://test-template/{x}")
-        def test_resource_with_path(x: int) -> str:
-            return f"test resource with {x}"
+        server.add_middleware(recording)
 
-        @mcp.prompt
-        def test_prompt(x: str) -> str:
-            return f"test prompt with {x}"
+        result = await server.read_resource("resource://test")
 
-        @mcp.tool
-        async def progress_tool(context: Context) -> None:
-            await context.report_progress(progress=1, total=10, message="test")
+        assert len(result.contents) == 1
+        assert result.contents[0].content == "test content"
+        assert recording.assert_called(hook="on_read_resource", times=1)
 
-        @mcp.tool
-        async def log_tool(context: Context) -> None:
-            await context.info(message="test log")
+    async def test_read_resource_with_run_middleware_false(self):
+        """Middleware is NOT applied when run_middleware=False."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
 
-        @mcp.tool
-        async def sample_tool(context: Context) -> None:
-            await context.sample("hello")
+        @server.resource("resource://test")
+        def test_resource() -> str:
+            return "test content"
 
-        mcp.add_middleware(nested_middleware)
+        server.add_middleware(recording)
 
-        return mcp
+        result = await server.read_resource("resource://test", run_middleware=False)
 
-    async def test_call_tool_on_parent_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
+        assert len(result.contents) == 1
+        assert result.contents[0].content == "test content"
+        # Middleware should not have been called
+        assert len(recording.calls) == 0
 
-        async with Client(mcp_server) as client:
-            await client.call_tool("add", {"a": 1, "b": 2})
+    async def test_read_resource_template_with_run_middleware_false(self):
+        """Templates also skip middleware when run_middleware=False."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
 
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="tools/call", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_call_tool", at_least=1)
+        @server.resource("resource://items/{item_id}")
+        def get_item(item_id: int) -> str:
+            return f"item {item_id}"
 
-        assert nested_middleware.assert_called(method="tools/call", times=0)
+        server.add_middleware(recording)
 
-    async def test_call_tool_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
+        result = await server.read_resource("resource://items/42", run_middleware=False)
 
-        async with Client(mcp_server) as client:
-            await client.call_tool("nested_add", {"a": 1, "b": 2})
+        assert len(result.contents) == 1
+        assert result.contents[0].content == "item 42"
+        assert len(recording.calls) == 0
 
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="tools/call", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_call_tool", at_least=1)
+    async def test_render_prompt_with_run_middleware_true(self):
+        """Middleware is applied when run_middleware=True (default)."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
 
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(method="tools/call", at_least=3)
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(hook="on_call_tool", at_least=1)
+        @server.prompt
+        def greet(name: str) -> str:
+            return f"Hello, {name}!"
 
-    async def test_read_resource_on_parent_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
+        server.add_middleware(recording)
 
-        async with Client(mcp_server) as client:
-            await client.read_resource("resource://test")
+        result = await server.render_prompt("greet", {"name": "World"})
 
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="resources/read", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_read_resource", at_least=1)
+        assert len(result.messages) == 1
+        # content is TextContent | EmbeddedResource, but we know it's TextContent from the test
+        assert isinstance(result.messages[0].content, mcp.types.TextContent)
+        assert result.messages[0].content.text == "Hello, World!"
+        assert recording.assert_called(hook="on_get_prompt", times=1)
 
-        assert nested_middleware.assert_called(times=0)
+    async def test_render_prompt_with_run_middleware_false(self):
+        """Middleware is NOT applied when run_middleware=False."""
+        recording = RecordingMiddleware()
+        server = FastMCP()
 
-    async def test_read_resource_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
+        @server.prompt
+        def greet(name: str) -> str:
+            return f"Hello, {name}!"
 
-        async with Client(mcp_server) as client:
-            await client.read_resource("resource://nested/test")
+        server.add_middleware(recording)
 
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="resources/read", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_read_resource", at_least=1)
-
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(method="resources/read", at_least=3)
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(hook="on_read_resource", at_least=1)
-
-    async def test_read_resource_template_on_parent_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.read_resource("resource://test-template/1")
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="resources/read", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_read_resource", at_least=1)
-
-        assert nested_middleware.assert_called(times=0)
-
-    async def test_read_resource_template_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.read_resource("resource://nested/test-template/1")
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="resources/read", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_read_resource", at_least=1)
-
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(method="resources/read", at_least=3)
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(hook="on_read_resource", at_least=1)
-
-    async def test_get_prompt_on_parent_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.get_prompt("test_prompt", {"x": "test"})
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="prompts/get", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_get_prompt", at_least=1)
-
-        assert nested_middleware.assert_called(times=0)
-
-    async def test_get_prompt_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.get_prompt("nested_test_prompt", {"x": "test"})
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="prompts/get", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_get_prompt", at_least=1)
-
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(method="prompts/get", at_least=3)
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(hook="on_get_prompt", at_least=1)
-
-    async def test_list_tools_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.list_tools()
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="tools/list", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_list_tools", at_least=1)
-
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(method="tools/list", at_least=3)
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(hook="on_list_tools", at_least=1)
-
-    async def test_list_resources_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.list_resources()
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(method="resources/list", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(hook="on_list_resources", at_least=1)
-
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(method="resources/list", at_least=3)
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(hook="on_list_resources", at_least=1)
-
-    async def test_list_resource_templates_on_nested_server(
-        self,
-        mcp_server: FastMCP,
-        nested_mcp_server: FastMCP,
-        recording_middleware: RecordingMiddleware,
-        nested_middleware: RecordingMiddleware,
-    ):
-        mcp_server.mount(nested_mcp_server, prefix="nested")
-
-        async with Client(mcp_server) as client:
-            await client.list_resource_templates()
-
-        assert recording_middleware.assert_called(at_least=3)
-        assert recording_middleware.assert_called(
-            method="resources/templates/list", at_least=3
-        )
-        assert recording_middleware.assert_called(hook="on_message", at_least=1)
-        assert recording_middleware.assert_called(hook="on_request", at_least=1)
-        assert recording_middleware.assert_called(
-            hook="on_list_resource_templates", at_least=1
+        result = await server.render_prompt(
+            "greet", {"name": "World"}, run_middleware=False
         )
 
-        assert nested_middleware.assert_called(at_least=3)
-        assert nested_middleware.assert_called(
-            method="resources/templates/list", at_least=3
-        )
-        assert nested_middleware.assert_called(hook="on_message", at_least=1)
-        assert nested_middleware.assert_called(hook="on_request", at_least=1)
-        assert nested_middleware.assert_called(
-            hook="on_list_resource_templates", at_least=1
-        )
+        assert len(result.messages) == 1
+        # content is TextContent | EmbeddedResource, but we know it's TextContent from the test
+        assert isinstance(result.messages[0].content, mcp.types.TextContent)
+        assert result.messages[0].content.text == "Hello, World!"
+        # Middleware should not have been called
+        assert len(recording.calls) == 0
 
+    async def test_middleware_modification_skipped_when_run_middleware_false(self):
+        """Middleware that modifies args/results is skipped."""
 
-class TestProxyServer:
-    async def test_call_tool(
-        self, mcp_server: FastMCP, recording_middleware: RecordingMiddleware
-    ):
-        # proxy server will have its tools listed as well as called in order to
-        # run the `should_enable_component` hook prior to the call.
-        proxy_server = FastMCP.as_proxy(mcp_server, name="Proxy Server")
-        async with Client(proxy_server) as client:
-            await client.call_tool("add", {"a": 1, "b": 2})
-
-        assert recording_middleware.assert_called(at_least=6)
-        assert recording_middleware.assert_called(method="tools/call", at_least=3)
-        assert recording_middleware.assert_called(method="tools/list", at_least=3)
-        assert recording_middleware.assert_called(hook="on_message", at_least=2)
-        assert recording_middleware.assert_called(hook="on_request", at_least=2)
-        assert recording_middleware.assert_called(hook="on_call_tool", at_least=1)
-        assert recording_middleware.assert_called(hook="on_list_tools", at_least=1)
-
-    async def test_proxied_tags_are_visible_to_middleware(
-        self, mcp_server: FastMCP, recording_middleware: RecordingMiddleware
-    ):
-        """Tests that tags on remote FastMCP servers are visible to middleware
-        via proxy. See https://github.com/jlowin/fastmcp/issues/1300"""
-        proxy_server = FastMCP.as_proxy(mcp_server, name="Proxy Server")
-
-        TAGS = []
-
-        class TagMiddleware(Middleware):
-            async def on_list_tools(self, context: MiddlewareContext, call_next):
-                nonlocal TAGS
-                result = await call_next(context)
-                for tool in result:
-                    TAGS.append(tool.tags)
-                return result
-
-        proxy_server.add_middleware(TagMiddleware())
-
-        async with Client(proxy_server) as client:
-            await client.list_tools()
-
-        assert TAGS == [{"add-tool"}, set(), set(), set()]
-
-
-class TestToolCallDenial:
-    """Test denying tool calls in middleware using ToolError."""
-
-    async def test_deny_tool_call_with_tool_error(self):
-        """Test that middleware can deny tool calls by raising ToolError."""
-
-        class AuthMiddleware(Middleware):
-            async def on_call_tool(
-                self,
-                context: MiddlewareContext[mcp.types.CallToolRequestParams],
-                call_next: CallNext[mcp.types.CallToolRequestParams, ToolResult],
-            ) -> ToolResult:
-                tool_name = context.message.name
-                if tool_name.lower() == "restricted_tool":
-                    raise ToolError("Access denied: tool is disabled")
+        class ModifyingMiddleware(Middleware):
+            async def on_call_tool(self, context: MiddlewareContext, call_next):
+                # Double the 'a' argument
+                assert context.message.arguments is not None
+                context.message.arguments["a"] *= 2
                 return await call_next(context)
 
-        server = FastMCP("TestServer")
+        server = FastMCP()
 
         @server.tool
-        def allowed_tool(x: int) -> int:
-            """This tool is allowed."""
-            return x * 2
+        def add(a: int, b: int) -> int:
+            return a + b
 
-        @server.tool
-        def restricted_tool(x: int) -> int:
-            """This tool should be denied by middleware."""
-            return x * 3
+        server.add_middleware(ModifyingMiddleware())
 
-        server.add_middleware(AuthMiddleware())
+        # With middleware: a=5 becomes a=10, result = 10 + 3 = 13
+        result_with = await server.call_tool("add", {"a": 5, "b": 3})
+        assert result_with.structured_content["result"] == 13  # type: ignore[union-attr,index]  # ty:ignore[not-subscriptable]
 
-        async with Client(server) as client:
-            # Allowed tool should work normally
-            result = await client.call_tool("allowed_tool", {"x": 5})
-            assert result.structured_content is not None
-            assert result.structured_content["result"] == 10
-
-            # Restricted tool should raise ToolError
-            with pytest.raises(ToolError) as exc_info:
-                await client.call_tool("restricted_tool", {"x": 5})
-
-            # Verify the error message is preserved
-            assert "Access denied: tool is disabled" in str(exc_info.value)
-
-    async def test_middleware_can_selectively_deny_tools(self):
-        """Test that middleware can deny specific tools while allowing others."""
-
-        denied_tools = set()
-
-        class SelectiveAuthMiddleware(Middleware):
-            async def on_call_tool(
-                self,
-                context: MiddlewareContext[mcp.types.CallToolRequestParams],
-                call_next: CallNext[mcp.types.CallToolRequestParams, ToolResult],
-            ) -> ToolResult:
-                tool_name = context.message.name
-
-                # Deny tools that start with "admin_"
-                if tool_name.startswith("admin_"):
-                    denied_tools.add(tool_name)
-                    raise ToolError(
-                        f"Access denied: {tool_name} requires admin privileges"
-                    )
-
-                return await call_next(context)
-
-        server = FastMCP("TestServer")
-
-        @server.tool
-        def public_tool(x: int) -> int:
-            """Public tool available to all."""
-            return x + 1
-
-        @server.tool
-        def admin_delete(item_id: str) -> str:
-            """Admin tool that should be denied."""
-            return f"Deleted {item_id}"
-
-        @server.tool
-        def admin_config(setting: str, value: str) -> str:
-            """Another admin tool that should be denied."""
-            return f"Set {setting} to {value}"
-
-        server.add_middleware(SelectiveAuthMiddleware())
-
-        async with Client(server) as client:
-            # Public tool should work
-            result = await client.call_tool("public_tool", {"x": 10})
-            assert result.structured_content is not None
-            assert result.structured_content["result"] == 11
-
-            # Admin tools should be denied
-            with pytest.raises(ToolError) as exc_info:
-                await client.call_tool("admin_delete", {"item_id": "test123"})
-            assert "requires admin privileges" in str(exc_info.value)
-
-            with pytest.raises(ToolError) as exc_info:
-                await client.call_tool(
-                    "admin_config", {"setting": "debug", "value": "true"}
-                )
-            assert "requires admin privileges" in str(exc_info.value)
-
-        # Verify both admin tools were denied
-        assert denied_tools == {"admin_delete", "admin_config"}
+        # Without middleware: a=5 stays a=5, result = 5 + 3 = 8
+        result_without = await server.call_tool(
+            "add", {"a": 5, "b": 3}, run_middleware=False
+        )
+        assert result_without.structured_content["result"] == 8  # type: ignore[union-attr,index]  # ty:ignore[not-subscriptable]

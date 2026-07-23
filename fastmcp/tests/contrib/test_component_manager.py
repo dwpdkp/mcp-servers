@@ -11,38 +11,9 @@ class TestComponentManagementRoutes:
     """Test the component management routes for tools, resources, and prompts."""
 
     @pytest.fixture
-    def mounted_mcp(self):
-        """Create a FastMCP server with a mounted sub-server and a tool, resource, and prompt on the sub-server."""
-        mounted_mcp = FastMCP("SubServer")
-
-        @mounted_mcp.tool()
-        def mounted_tool() -> str:
-            """Test tool for tool management routes."""
-            return "mounted_tool_result"
-
-        @mounted_mcp.resource("data://mounted_resource")
-        def mounted_resource() -> str:
-            """Test resource for tool management routes."""
-            return "mounted_resource_result"
-
-        # Add a test resource
-        @mounted_mcp.resource("data://mounted_resource/{id}")
-        def test_template(id: str) -> dict:
-            """Test template for tool management routes."""
-            return {"id": id, "value": "data"}
-
-        @mounted_mcp.prompt()
-        def mounted_prompt() -> str:
-            """Test prompt for tool management routes."""
-            return "mounted_prompt_result"
-
-        return mounted_mcp
-
-    @pytest.fixture
-    def mcp(self, mounted_mcp):
+    def mcp(self):
         """Create a FastMCP server with test tools, resources, and prompts."""
         mcp = FastMCP("TestServer")
-        mcp.mount(mounted_mcp, prefix="sub")
         set_up_component_manager(server=mcp)
 
         # Add a test tool
@@ -79,8 +50,9 @@ class TestComponentManagementRoutes:
     async def test_enable_tool_route(self, client, mcp):
         """Test enabling a tool via the HTTP route."""
         # First disable the tool
-        tool = await mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
         # Enable the tool via the HTTP route
         response = client.post("/tools/test_tool/enable")
@@ -89,14 +61,14 @@ class TestComponentManagementRoutes:
         assert response.json() == {"message": "Enabled tool: test_tool"}
 
         # Verify the tool is enabled
-        tool = await mcp._tool_manager.get_tool("test_tool")
-        assert tool.enabled is True
+        tools = await mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
     async def test_disable_tool_route(self, client, mcp):
         """Test disabling a tool via the HTTP route."""
         # First ensure the tool is enabled
-        tool = await mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = True
+        tools = await mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
         # Disable the tool via the HTTP route
         response = client.post("/tools/test_tool/disable")
@@ -105,14 +77,15 @@ class TestComponentManagementRoutes:
         assert response.json() == {"message": "Disabled tool: test_tool"}
 
         # Verify the tool is disabled
-        tool = await mcp._tool_manager.get_tool("test_tool")
-        assert tool.enabled is False
+        tools = await mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
     async def test_enable_resource_route(self, client, mcp):
         """Test enabling a resource via the HTTP route."""
-        # First disable the resource
-        resource = await mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = False
+        # First disable the resource (can use URI as name for resources)
+        mcp.disable(names={"data://test_resource"}, components={"resource"})
+        resources = await mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
         # Enable the resource via the HTTP route
         response = client.post("/resources/data://test_resource/enable")
@@ -121,14 +94,14 @@ class TestComponentManagementRoutes:
         assert response.json() == {"message": "Enabled resource: data://test_resource"}
 
         # Verify the resource is enabled
-        resource = await mcp._resource_manager.get_resource("data://test_resource")
-        assert resource.enabled is True
+        resources = await mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_disable_resource_route(self, client, mcp):
         """Test disabling a resource via the HTTP route."""
         # First ensure the resource is enabled
-        resource = await mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = True
+        resources = await mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
         # Disable the resource via the HTTP route
         response = client.post("/resources/data://test_resource/disable")
@@ -137,38 +110,42 @@ class TestComponentManagementRoutes:
         assert response.json() == {"message": "Disabled resource: data://test_resource"}
 
         # Verify the resource is disabled
-        resource = await mcp._resource_manager.get_resource("data://test_resource")
-        assert resource.enabled is False
+        resources = await mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_enable_template_route(self, client, mcp):
-        """Test enabling a resource on a mounted server via the parent server's HTTP route."""
+        """Test enabling a resource template via the HTTP route."""
         key = "data://test_resource/{id}"
-        resource = mcp._resource_manager._templates[key]
-        resource.enabled = False
+        mcp.disable(names={"data://test_resource/{id}"}, components={"template"})
+        templates = await mcp.list_resource_templates()
+        assert not any(t.uri_template == key for t in templates)
         response = client.post("/resources/data://test_resource/{id}/enable")
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {
             "message": "Enabled resource: data://test_resource/{id}"
         }
-        assert resource.enabled is True
+        templates = await mcp.list_resource_templates()
+        assert any(t.uri_template == key for t in templates)
 
     async def test_disable_template_route(self, client, mcp):
-        """Test disabling a resource on a mounted server via the parent server's HTTP route."""
+        """Test disabling a resource template via the HTTP route."""
         key = "data://test_resource/{id}"
-        resource = mcp._resource_manager._templates[key]
-        resource.enabled = True
+        templates = await mcp.list_resource_templates()
+        assert any(t.uri_template == key for t in templates)
         response = client.post("/resources/data://test_resource/{id}/disable")
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {
             "message": "Disabled resource: data://test_resource/{id}"
         }
-        assert resource.enabled is False
+        templates = await mcp.list_resource_templates()
+        assert not any(t.uri_template == key for t in templates)
 
     async def test_enable_prompt_route(self, client, mcp):
         """Test enabling a prompt via the HTTP route."""
         # First disable the prompt
-        prompt = await mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        mcp.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
         # Enable the prompt via the HTTP route
         response = client.post("/prompts/test_prompt/enable")
@@ -177,14 +154,14 @@ class TestComponentManagementRoutes:
         assert response.json() == {"message": "Enabled prompt: test_prompt"}
 
         # Verify the prompt is enabled
-        prompt = await mcp._prompt_manager.get_prompt("test_prompt")
-        assert prompt.enabled is True
+        prompts = await mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
     async def test_disable_prompt_route(self, client, mcp):
         """Test disabling a prompt via the HTTP route."""
         # First ensure the prompt is enabled
-        prompt = await mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = True
+        prompts = await mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
         # Disable the prompt via the HTTP route
         response = client.post("/prompts/test_prompt/disable")
@@ -193,144 +170,8 @@ class TestComponentManagementRoutes:
         assert response.json() == {"message": "Disabled prompt: test_prompt"}
 
         # Verify the prompt is disabled
-        prompt = await mcp._prompt_manager.get_prompt("test_prompt")
-        assert prompt.enabled is False
-
-    async def test_enable_tool_route_on_mounted_server(self, client, mounted_mcp):
-        """Test enabling a tool on a mounted server via the parent server's HTTP route."""
-        # Disable the tool on the sub-server
-        sub_tool = await mounted_mcp._tool_manager.get_tool("mounted_tool")
-        sub_tool.enabled = False
-        # Enable via parent
-        response = client.post("/tools/sub_mounted_tool/enable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {"message": "Enabled tool: sub_mounted_tool"}
-        # Confirm disabled on sub-server
-        assert sub_tool.enabled is True
-
-    async def test_disable_tool_route_on_mounted_server(self, client, mounted_mcp):
-        """Test disabling a tool on a mounted server via the parent server's HTTP route."""
-        # Enable the tool on the sub-server
-        sub_tool = await mounted_mcp._tool_manager.get_tool("mounted_tool")
-        sub_tool.enabled = True
-        # Disable via parent
-        response = client.post("/tools/sub_mounted_tool/disable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {"message": "Disabled tool: sub_mounted_tool"}
-        # Confirm disabled on sub-server
-        assert sub_tool.enabled is False
-
-    async def test_enable_resource_route_on_mounted_server(self, client, mounted_mcp):
-        """Test enabling a resource on a mounted server via the parent server's HTTP route."""
-        resource = await mounted_mcp._resource_manager.get_resource(
-            "data://mounted_resource"
-        )
-        resource.enabled = False
-        response = client.post("/resources/data://sub/mounted_resource/enable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {
-            "message": "Enabled resource: data://sub/mounted_resource"
-        }
-        resource = await mounted_mcp._resource_manager.get_resource(
-            "data://mounted_resource"
-        )
-        assert resource.enabled is True
-
-    async def test_disable_resource_route_on_mounted_server(self, client, mounted_mcp):
-        """Test disabling a resource on a mounted server via the parent server's HTTP route."""
-        resource = await mounted_mcp._resource_manager.get_resource(
-            "data://mounted_resource"
-        )
-        resource.enabled = True
-        response = client.post("/resources/data://sub/mounted_resource/disable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {
-            "message": "Disabled resource: data://sub/mounted_resource"
-        }
-        resource = await mounted_mcp._resource_manager.get_resource(
-            "data://mounted_resource"
-        )
-        assert resource.enabled is False
-
-    async def test_enable_template_route_on_mounted_server(self, client, mounted_mcp):
-        """Test enabling a resource on a mounted server via the parent server's HTTP route."""
-        key = "data://mounted_resource/{id}"
-        resource = mounted_mcp._resource_manager._templates[key]
-        resource.enabled = False
-        response = client.post("/resources/data://sub/mounted_resource/{id}/enable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {
-            "message": "Enabled resource: data://sub/mounted_resource/{id}"
-        }
-        assert resource.enabled is True
-
-    async def test_disable_template_route_on_mounted_server(self, client, mounted_mcp):
-        """Test disabling a resource on a mounted server via the parent server's HTTP route."""
-        key = "data://mounted_resource/{id}"
-        resource = mounted_mcp._resource_manager._templates[key]
-        resource.enabled = True
-        response = client.post("/resources/data://sub/mounted_resource/{id}/disable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {
-            "message": "Disabled resource: data://sub/mounted_resource/{id}"
-        }
-        assert resource.enabled is False
-
-    async def test_enable_prompt_route_on_mounted_server(self, client, mounted_mcp):
-        """Test enabling a prompt on a mounted server via the parent server's HTTP route."""
-        prompt = await mounted_mcp._prompt_manager.get_prompt("mounted_prompt")
-        prompt.enabled = False
-        response = client.post("/prompts/sub_mounted_prompt/enable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {"message": "Enabled prompt: sub_mounted_prompt"}
-        prompt = await mounted_mcp._prompt_manager.get_prompt("mounted_prompt")
-        assert prompt.enabled is True
-
-    async def test_disable_prompt_route_on_mounted_server(self, client, mounted_mcp):
-        """Test disabling a prompt on a mounted server via the parent server's HTTP route."""
-        prompt = await mounted_mcp._prompt_manager.get_prompt("mounted_prompt")
-        prompt.enabled = True
-        response = client.post("/prompts/sub_mounted_prompt/disable")
-        assert response.status_code == status.HTTP_200_OK
-        assert response.json() == {"message": "Disabled prompt: sub_mounted_prompt"}
-        prompt = await mounted_mcp._prompt_manager.get_prompt("mounted_prompt")
-        assert prompt.enabled is False
-
-    def test_enable_nonexistent_tool(self, client):
-        """Test enabling a non-existent tool returns 404."""
-        response = client.post("/tools/nonexistent_tool/enable")
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        assert response.text == "Unknown tool: nonexistent_tool"
-
-    def test_disable_nonexistent_tool(self, client):
-        """Test disabling a non-existent tool returns 404."""
-        response = client.post("/tools/nonexistent_tool/disable")
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        assert response.text == "Unknown tool: nonexistent_tool"
-
-    def test_enable_nonexistent_resource(self, client):
-        """Test enabling a non-existent resource returns 404."""
-        response = client.post("/resources/nonexistent://resource/enable")
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        assert response.text == "Unknown resource: nonexistent://resource"
-
-    def test_disable_nonexistent_resource(self, client):
-        """Test disabling a non-existent resource returns 404."""
-        response = client.post("/resources/nonexistent://resource/disable")
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        assert response.text == "Unknown resource: nonexistent://resource"
-
-    def test_enable_nonexistent_prompt(self, client):
-        """Test enabling a non-existent prompt returns 404."""
-        response = client.post("/prompts/nonexistent_prompt/enable")
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        assert response.text == "Unknown prompt: nonexistent_prompt"
-
-    def test_disable_nonexistent_prompt(self, client):
-        """Test disabling a non-existent prompt returns 404."""
-        response = client.post("/prompts/nonexistent_prompt/disable")
-        assert response.status_code == status.HTTP_404_NOT_FOUND
-        assert response.text == "Unknown prompt: nonexistent_prompt"
+        prompts = await mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
 
 class TestAuthComponentManagementRoutes:
@@ -383,38 +224,43 @@ class TestAuthComponentManagementRoutes:
 
     async def test_unauthorized_enable_tool(self):
         """Test that unauthenticated requests to enable a tool are rejected."""
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        self.mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
         response = self.client.post("/tools/test_tool/enable")
         assert response.status_code == 401
-        assert tool.enabled is False
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
     async def test_authorized_enable_tool(self):
         """Test that authenticated requests to enable a tool are allowed."""
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        self.mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
         response = self.client.post(
             "/tools/test_tool/enable", headers={"Authorization": "Bearer " + self.token}
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Enabled tool: test_tool"}
-        assert tool.enabled is True
+        tools = await self.mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
     async def test_unauthorized_disable_tool(self):
         """Test that unauthenticated requests to disable a tool are rejected."""
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = True
+        tools = await self.mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
         response = self.client.post("/tools/test_tool/disable")
         assert response.status_code == 401
-        assert tool.enabled is True
+        tools = await self.mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
     async def test_authorized_disable_tool(self):
         """Test that authenticated requests to disable a tool are allowed."""
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = True
+        tools = await self.mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
         response = self.client.post(
             "/tools/test_tool/disable",
@@ -422,24 +268,28 @@ class TestAuthComponentManagementRoutes:
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Disabled tool: test_tool"}
-        assert tool.enabled is False
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
     async def test_forbidden_enable_tool(self):
         """Test that requests with insufficient scopes are rejected."""
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        self.mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
         response = self.client.post(
             "/tools/test_tool/enable",
             headers={"Authorization": "Bearer " + self.token_without_scopes},
         )
         assert response.status_code == 403
-        assert tool.enabled is False
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
     async def test_authorized_enable_resource(self):
         """Test that authenticated requests to enable a resource are allowed."""
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = False
+        self.mcp.disable(names={"data://test_resource"}, components={"resource"})
+        resources = await self.mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
         response = self.client.post(
             "/resources/data://test_resource/enable",
@@ -447,33 +297,37 @@ class TestAuthComponentManagementRoutes:
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Enabled resource: data://test_resource"}
-        assert resource.enabled is True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_unauthorized_disable_resource(self):
         """Test that unauthenticated requests to disable a resource are rejected."""
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
         response = self.client.post("/resources/data://test_resource/disable")
         assert response.status_code == 401
-        assert resource.enabled is True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_forbidden_enable_resource(self):
         """Test that requests with insufficient scopes are rejected."""
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = False
+        self.mcp.disable(names={"data://test_resource"}, components={"resource"})
+        resources = await self.mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
         response = self.client.post(
             "/resources/data://test_resource/disable",
             headers={"Authorization": "Bearer " + self.token_without_scopes},
         )
         assert response.status_code == 403
-        assert resource.enabled is False
+        resources = await self.mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_authorized_disable_resource(self):
         """Test that authenticated requests to disable a resource are allowed."""
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
         response = self.client.post(
             "/resources/data://test_resource/disable",
@@ -481,21 +335,25 @@ class TestAuthComponentManagementRoutes:
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Disabled resource: data://test_resource"}
-        assert resource.enabled is False
+        resources = await self.mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_unauthorized_enable_prompt(self):
         """Test that unauthenticated requests to enable a prompt are rejected."""
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        self.mcp.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
         response = self.client.post("/prompts/test_prompt/enable")
         assert response.status_code == 401
-        assert prompt.enabled is False
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
     async def test_authorized_enable_prompt(self):
         """Test that authenticated requests to enable a prompt are allowed."""
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        self.mcp.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
         response = self.client.post(
             "/prompts/test_prompt/enable",
@@ -503,33 +361,36 @@ class TestAuthComponentManagementRoutes:
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Enabled prompt: test_prompt"}
-        assert prompt.enabled is True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
     async def test_unauthorized_disable_prompt(self):
         """Test that unauthenticated requests to disable a prompt are rejected."""
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
         response = self.client.post("/prompts/test_prompt/disable")
         assert response.status_code == 401
-        assert prompt.enabled is True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
     async def test_forbidden_disable_prompt(self):
         """Test that requests with insufficient scopes are rejected."""
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
         response = self.client.post(
             "/prompts/test_prompt/disable",
             headers={"Authorization": "Bearer " + self.token_without_scopes},
         )
         assert response.status_code == 403
-        assert prompt.enabled is True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
     async def test_authorized_disable_prompt(self):
         """Test that authenticated requests to disable a prompt are allowed."""
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
         response = self.client.post(
             "/prompts/test_prompt/disable",
@@ -537,7 +398,8 @@ class TestAuthComponentManagementRoutes:
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Disabled prompt: test_prompt"}
-        assert prompt.enabled is False
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
 
 class TestComponentManagerWithPath:
@@ -567,37 +429,35 @@ class TestComponentManagerWithPath:
         return TestClient(mcp_with_path.http_app())
 
     async def test_enable_tool_route_with_path(self, client_with_path, mcp_with_path):
-        tool = await mcp_with_path._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        mcp_with_path.disable(names={"test_tool"}, components={"tool"})
+        tools = await mcp_with_path.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
         response = client_with_path.post("/test/tools/test_tool/enable")
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {"message": "Enabled tool: test_tool"}
-        tool = await mcp_with_path._tool_manager.get_tool("test_tool")
-        assert tool.enabled is True
+        tools = await mcp_with_path.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
     async def test_disable_resource_route_with_path(
         self, client_with_path, mcp_with_path
     ):
-        resource = await mcp_with_path._resource_manager.get_resource(
-            "data://test_resource"
-        )
-        resource.enabled = True
+        resources = await mcp_with_path.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
         response = client_with_path.post("/test/resources/data://test_resource/disable")
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {"message": "Disabled resource: data://test_resource"}
-        resource = await mcp_with_path._resource_manager.get_resource(
-            "data://test_resource"
-        )
-        assert resource.enabled is False
+        resources = await mcp_with_path.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_enable_prompt_route_with_path(self, client_with_path, mcp_with_path):
-        prompt = await mcp_with_path._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        mcp_with_path.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await mcp_with_path.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
         response = client_with_path.post("/test/prompts/test_prompt/enable")
         assert response.status_code == status.HTTP_200_OK
         assert response.json() == {"message": "Enabled prompt: test_prompt"}
-        prompt = await mcp_with_path._prompt_manager.get_prompt("test_prompt")
-        assert prompt.enabled is True
+        prompts = await mcp_with_path.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
 
 
 class TestComponentManagerWithPathAuth:
@@ -643,88 +503,100 @@ class TestComponentManagerWithPathAuth:
         self.client = TestClient(self.mcp.http_app())
 
     async def test_unauthorized_enable_tool(self):
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        self.mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
         response = self.client.post("/test/tools/test_tool/enable")
         assert response.status_code == 401
-        assert tool.enabled is False
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
     async def test_forbidden_enable_tool(self):
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        self.mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
         response = self.client.post(
             "/test/tools/test_tool/enable",
             headers={"Authorization": "Bearer " + self.token_without_scopes},
         )
         assert response.status_code == 403
-        assert tool.enabled is False
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
 
     async def test_authorized_enable_tool(self):
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        tool.enabled = False
+        self.mcp.disable(names={"test_tool"}, components={"tool"})
+        tools = await self.mcp.list_tools()
+        assert not any(t.name == "test_tool" for t in tools)
         response = self.client.post(
             "/test/tools/test_tool/enable",
             headers={"Authorization": "Bearer " + self.token},
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Enabled tool: test_tool"}
-        tool = await self.mcp._tool_manager.get_tool("test_tool")
-        assert tool.enabled is True
+        tools = await self.mcp.list_tools()
+        assert any(t.name == "test_tool" for t in tools)
 
     async def test_unauthorized_disable_resource(self):
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
         response = self.client.post("/test/resources/data://test_resource/disable")
         assert response.status_code == 401
-        assert resource.enabled is True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_forbidden_disable_resource(self):
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
         response = self.client.post(
             "/test/resources/data://test_resource/disable",
             headers={"Authorization": "Bearer " + self.token_without_scopes},
         )
         assert response.status_code == 403
-        assert resource.enabled is True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_authorized_disable_resource(self):
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        resource.enabled = True
+        resources = await self.mcp.list_resources()
+        assert any(str(r.uri) == "data://test_resource" for r in resources)
         response = self.client.post(
             "/test/resources/data://test_resource/disable",
             headers={"Authorization": "Bearer " + self.token},
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Disabled resource: data://test_resource"}
-        resource = await self.mcp._resource_manager.get_resource("data://test_resource")
-        assert resource.enabled is False
+        resources = await self.mcp.list_resources()
+        assert not any(str(r.uri) == "data://test_resource" for r in resources)
 
     async def test_unauthorized_enable_prompt(self):
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        self.mcp.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
         response = self.client.post("/test/prompts/test_prompt/enable")
         assert response.status_code == 401
-        assert prompt.enabled is False
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
     async def test_forbidden_enable_prompt(self):
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        self.mcp.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
         response = self.client.post(
             "/test/prompts/test_prompt/enable",
             headers={"Authorization": "Bearer " + self.token_without_scopes},
         )
         assert response.status_code == 403
-        assert prompt.enabled is False
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
 
     async def test_authorized_enable_prompt(self):
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        prompt.enabled = False
+        self.mcp.disable(names={"test_prompt"}, components={"prompt"})
+        prompts = await self.mcp.list_prompts()
+        assert not any(p.name == "test_prompt" for p in prompts)
         response = self.client.post(
             "/test/prompts/test_prompt/enable",
             headers={"Authorization": "Bearer " + self.token},
         )
         assert response.status_code == 200
         assert response.json() == {"message": "Enabled prompt: test_prompt"}
-        prompt = await self.mcp._prompt_manager.get_prompt("test_prompt")
-        assert prompt.enabled is True
+        prompts = await self.mcp.list_prompts()
+        assert any(p.name == "test_prompt" for p in prompts)
