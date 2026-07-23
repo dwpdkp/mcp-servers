@@ -73,6 +73,12 @@ class ProxmoxTaskResponse(BaseModel):
     data: str = Field(..., description="The UPID (Unique Process ID) of the task")
 
 
+class ProxmoxUpdateConfigResponse(BaseModel):
+    """PUT .../config returns null on a synchronous change, or a UPID when the
+    change (e.g. a disk resize) requires an async task."""
+    data: Optional[str] = Field(None, description="UPID if the change was async, else null")
+
+
 class ProxmoxStorage(BaseModel):
     """
     Contract for Proxmox Storage.

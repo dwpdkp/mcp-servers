@@ -219,6 +219,49 @@ Returns the current configuration (CPU, RAM, Network, etc.) of the specific inst
 
 ---
 
+## Tool: `update_instance_config`
+**MCP Tool Name:** `update_instance_config`
+**Proxmox Endpoint:** `PUT /api2/json/nodes/{node}/{type}/{vmid}/config`
+
+### Parameters
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `type` | `string` | `lxc` or `qemu` |
+| `key` | `string` | Single config key, e.g. `memory`, `agent`, `onboot`, `boot`, `sata0` |
+| `value` | `string` | Value for that key, e.g. `3072`, `enabled=1`, `1`, `order=sata0` |
+
+### Expected Response Schema
+`data` is `null` for synchronous changes, or a UPID string if the change
+(e.g. an online disk resize) was dispatched as an async task.
+
+### Safety Tier
+Restricted — requires `confirmed=true`. Not in `safe_tools`.
+
+---
+
+## Tool: `node_exec`
+**MCP Tool Name:** `node_exec`
+**Mechanism:** SSH to the node as `PROXMOX_SSH_USER` (sudo), no REST endpoint —
+the Proxmox API has no generic host-shell endpoint.
+
+### Parameters
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `node` | `string` | Node hostname |
+| `command` | `string` | Must match `NODE_EXEC_ALLOWED_PATTERNS` in `tools/exec.py` |
+
+### Allowed commands
+`qm status/config/list`, `qm agent <vmid> ping`, `pct status/config/list`,
+`pvesm status`, `zpool status/list`, `df`, `free`, `uptime`, `uname`.
+
+### Safety Tier
+Safe — in `safe_tools`, no `confirmed=true` needed, because the allowlist
+itself is the safety boundary. Anything not matching raises `ToolError`
+regardless of `confirmed`. There is deliberately no bypass for this tool —
+mutating changes must go through `update_instance_config` or `power_control`.
+
+---
+
 ## Tool: `get_task_log`
 **MCP Tool Name:** `get_task_log`  
 **Proxmox Endpoint:** `GET /api2/json/nodes/{node}/tasks/{upid}/log`

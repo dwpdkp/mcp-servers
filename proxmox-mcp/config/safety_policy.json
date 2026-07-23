@@ -11,7 +11,8 @@
     "get_task_log",
     "get_mcp_logs",
     "get_resource_usage",
-    "list_snapshots"
+    "list_snapshots",
+    "node_exec"
   ],
   "critical_tools": [
     "delete_instance"

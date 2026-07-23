@@ -8,7 +8,7 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from proxmox_mcp.server import mcp
 from proxmox_mcp.tools import safety_checked, get_client
-from proxmox_mcp.models import ProxmoxTaskResponse
+from proxmox_mcp.models import ProxmoxTaskResponse, ProxmoxUpdateConfigResponse
 
 
 @mcp.tool()
@@ -110,6 +110,32 @@ async def create_vm(
         params["onboot"] = onboot
     return await get_client().fetch_and_validate(
         f"/nodes/{node}/qemu", ProxmoxTaskResponse, method="POST", params=params,
+    )
+
+
+@mcp.tool()
+@safety_checked
+async def update_instance_config(
+    node: str,
+    vmid: int,
+    type: Literal["lxc", "qemu"],
+    key: str,
+    value: str,
+    confirmed: bool = False,
+) -> dict:
+    """Set a single config key on a VM or LXC — equivalent to `qm set`/`pct set`.
+
+    Use for things create_vm/create_lxc don't cover post-creation: memory,
+    cores, agent, onboot, boot order, disk attach, etc. One key/value pair
+    per call (Proxmox's config PUT accepts many keys at once, but scoping
+    this tool to one avoids building a free-form params dict from tool input).
+
+    Examples: key="memory" value="3072", key="agent" value="enabled=1",
+    key="onboot" value="1", key="boot" value="order=sata0".
+    """
+    return await get_client().fetch_and_validate(
+        f"/nodes/{node}/{type}/{vmid}/config",
+        ProxmoxUpdateConfigResponse, method="PUT", params={key: value},
     )
 
 

@@ -16,7 +16,12 @@ PERMISSION_MAP = {
     ("POST", "/nodes/.*/lxc$"): "VM.Allocate, Datastore.AllocateSpace",
     ("POST", "/nodes/.*/lxc/.*/exec$"): "VM.Console",
     ("POST", "/nodes/.*/qemu$"): "VM.Allocate, Datastore.AllocateSpace",
-    ("PUT", "/nodes/.*/qemu/.*/config$"): "VM.Config.Cloudinit",
+    # Shared by set_vm_cloudinit and update_instance_config — actual privilege
+    # depends on which key is being changed (VM.Config.Memory, .CPU, .Disk,
+    # .Network, .Cloudinit, .Options, etc.), so this is a representative hint,
+    # not exhaustive. Proxmox itself will reject with a precise message.
+    ("PUT", "/nodes/.*/qemu/.*/config$"): "VM.Config.* (varies by key — Memory/CPU/Disk/Network/Cloudinit/Options)",
+    ("PUT", "/nodes/.*/lxc/.*/config$"): "VM.Config.* (varies by key — Memory/CPU/Disk/Network/Options)",
     ("GET", "/nodes/.*/lxc/.*/snapshot$"): "VM.Audit",
     ("GET", "/nodes/.*/qemu/.*/snapshot$"): "VM.Audit",
     ("POST", "/nodes/.*/lxc/.*/snapshot$"): "VM.Snapshot",
