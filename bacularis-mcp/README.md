@@ -46,7 +46,7 @@ Add to `.mcp.json`:
 | `get_job` | Get details for a specific job by ID |
 | `get_job_files` | List files in a job backup |
 | `get_job_totals` | Total bytes and files across all jobs |
-| `get_job_log` | Show bconsole output for a job |
+| `get_job_log` | Actual job log/termination summary (`/joblog/{id}`) — fixed 2026-07-23, previously called `/jobs/{id}/show` and returned the static job-resource config instead of the real log |
 
 ### Clients
 
@@ -83,6 +83,7 @@ Add to `.mcp.json`:
 - All operations are read-only — no job execution or configuration changes
 - Works with both Bacula Community and Bareos (Bacularis supports both)
 - Self-signed TLS certificates are accepted (verify=False)
+- **This server reads the catalog (MariaDB), not live Director state.** A running job's catalog row (`jobbytes`, `volsessionid`, etc.) is only written periodically and finalized at completion — `get_job`/`get_jobs` can show 0 bytes for a job that is genuinely transferring data. For live status of running/queued jobs, use the companion **bconsole-mcp** server's `status_director()` or `list_running_jobs()`, which read the Director's in-memory state instead. Never decide a job is a stuck zombie from this server's data alone before cancelling it.
 
 ---
 
@@ -91,3 +92,4 @@ Add to `.mcp.json`:
 | Date | Author | Changes |
 |------|--------|---------|
 | 2026-02-19 | Doug Pearson | Initial creation |
+| 2026-07-23 | Doug Pearson | Fixed `get_job_log` — was calling `/jobs/{id}/show` (static config dump) instead of `/joblog/{id}` (real log/termination summary). Added explicit staleness warnings to `get_job`/`get_jobs` docstrings and README after a bad zombie-job cancel caused by trusting a stale catalog snapshot over live Director state. |

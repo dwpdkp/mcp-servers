@@ -49,6 +49,15 @@ def get_jobs(
 ) -> str:
     """List backup jobs with optional filters.
 
+    WARNING: This reads the Bacula catalog (MariaDB), which the Director
+    only writes to periodically while a job is running and finalizes at
+    completion. A currently-running job (jobstatus=R) can show 0 bytes/files
+    here for hours while it is genuinely transferring data. Do NOT use this
+    to decide whether a job is a stuck zombie — use the bconsole MCP server's
+    status_director() or list_running_jobs() instead, which read the
+    Director's live in-memory state. This tool is for historical/completed
+    job search only.
+
     Args:
         limit: Max number of jobs to return (default 25)
         name: Filter by job name
@@ -71,6 +80,14 @@ def get_jobs(
 @mcp.tool()
 def get_job(jobid: int) -> str:
     """Get details for a specific job by its JobId.
+
+    WARNING: Reads the catalog, not live Director state. For a currently
+    running job this can show jobbytes=0/volsessionid=0 even while real data
+    is being transferred at the storage-daemon level — the catalog row isn't
+    finalized until the job completes. Never use this alone to conclude a
+    job is a stuck zombie before cancelling it; cross-check with the
+    bconsole MCP server's status_director() or list_running_jobs() first,
+    which reflect the Director's live in-memory job state.
 
     Args:
         jobid: The Bacula job ID
@@ -102,12 +119,12 @@ def get_job_totals() -> str:
 
 @mcp.tool()
 def get_job_log(jobid: int) -> str:
-    """Show bconsole output / details for a specific job.
+    """Get the actual job log (status/error messages) for a specific job.
 
     Args:
         jobid: The Bacula job ID
     """
-    return _get(f"/jobs/{jobid}/show")
+    return _get(f"/joblog/{jobid}")
 
 
 # --- Clients ---
