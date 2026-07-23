@@ -5,6 +5,7 @@ import os
 import asyncio
 import httpx
 from dotenv import load_dotenv
+from proxmox_mcp.api.client import ProxmoxClient
 from proxmox_mcp.models import (
     ProxmoxNodeListResponse,
     ProxmoxLXCListResponse,
@@ -19,13 +20,18 @@ async def test_all_tools():
     url = os.getenv("PROXMOX_URL")
     token_name = os.getenv("PROXMOX_TOKEN_NAME")
     token_value = os.getenv("PROXMOX_TOKEN_VALUE")
-    verify_ssl = os.getenv("PROXMOX_VERIFY_SSL", "true").lower() == "true"
+    verify_ssl_raw = os.getenv("PROXMOX_VERIFY_SSL", "true").lower() == "true"
 
     if not all([url, token_name, token_value]):
         print("Error: Missing environment variables in .env.")
         return
 
     headers = {"Authorization": f"PVEAPIToken={token_name}={token_value}"}
+
+    # Reuse ProxmoxClient's verify-target resolution (system CA bundle over
+    # certifi's bundled list) so this script tests the same TLS path the
+    # real server uses instead of drifting from it.
+    verify_ssl = ProxmoxClient(url=url, token_name=token_name, token_value=token_value, verify_ssl=verify_ssl_raw).verify_ssl
 
     async with httpx.AsyncClient(verify=verify_ssl) as client:
         try:

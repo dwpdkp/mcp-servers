@@ -1,4 +1,5 @@
 import logging
+import os
 import httpx
 from typing import Any, Optional
 from pydantic import ValidationError
@@ -7,12 +8,22 @@ from proxmox_mcp.api.permissions import get_required_permission
 
 logger = logging.getLogger("proxmox-mcp")
 
+# httpx's verify=True uses certifi's bundled CA list, not the OS trust store,
+# so internally-signed certs (e.g. our own CA) fail verification even though
+# the system trusts them fine via /etc/ssl/certs/ca-certificates.crt. Prefer
+# the system bundle when present; fall back to certifi's default otherwise
+# (e.g. macOS, which has no single system bundle file).
+_SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
 
 class ProxmoxClient:
     def __init__(self, url: str, token_name: str, token_value: str, verify_ssl: bool = True):
         self.base_url = url
         self.headers = {"Authorization": f"PVEAPIToken={token_name}={token_value}"}
-        self.verify_ssl = verify_ssl
+        if verify_ssl and os.path.exists(_SYSTEM_CA_BUNDLE):
+            self.verify_ssl = _SYSTEM_CA_BUNDLE
+        else:
+            self.verify_ssl = verify_ssl
 
     async def fetch_and_validate(self, endpoint: str, model_class: Any, method: str = "GET", params: Optional[dict] = None) -> dict:
         url = f"{self.base_url}{endpoint}"
