@@ -14,7 +14,7 @@ A collection of Model Context Protocol (MCP) server implementations (some author
 | **[unraid-mcp](./unraid-mcp/README.md)** | Unraid GraphQL API: system, array, docker, VMs, plugins, notifications, live telemetry | Third-party ([jmagar/unraid-mcp](https://github.com/jmagar/unraid-mcp)) | Confirm-gated destructive subactions built in upstream; not modified here |
 | **[mcp_youtube_dlp](./mcp_youtube_dlp/README.md)** | YouTube video/audio download via yt-dlp | In-house | Personal download tool; no destructive/shared-infrastructure operations |
 | **[weather](./weather/README.md)** | Public NWS weather alerts and forecasts | In-house | Public, unauthenticated, read-only API wrapper |
-| **[fastmcp](./fastmcp/README.md)** | Vendored MCP server/client framework used by several of the above | Third-party ([jlowin/fastmcp](https://github.com/jlowin/fastmcp)) | Framework, not a running server |
+| **[fastmcp](./fastmcp/README.md)** | Vendored reference copy of the FastMCP framework (kept for reading/example purposes when building future in-house servers — not imported by anything in this repo) | Third-party ([jlowin/fastmcp](https://github.com/jlowin/fastmcp)) | Framework, not a running server. Refreshed to upstream v3.4.4 on 2026-07-23 (was a stale pre-2.x dev build, source of 8 open Dependabot alerts). No auto-update — re-clone the latest tagged release periodically (`pip index versions fastmcp` for the current version) so it doesn't drift stale and re-trigger alerts. |
 | **MCP-Builder-Stuff** | Vendored MCP Python SDK reference | Third-party ([modelcontextprotocol/python-sdk](https://github.com/modelcontextprotocol/python-sdk)) | Framework, not a running server |
 
 ## Security posture
