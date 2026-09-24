@@ -31,8 +31,8 @@ mcp = FastMCP(
     instructions=(
         "Read-only Altaro VM Backup reporting for the work Hyper-V hosts STEAMHV1 and STEAMHV2. "
         "Reads per-VM backup, failure and verification results from the Windows Application event "
-        "log, live backup progress per VM (percent complete), per-VM last/next backup and offsite "
-        "copy status, plus Altaro service state. Use it to find which VM an Altaro backup alert "
+        "log, live backup progress per VM (percent complete), per-VM last/next backup status "
+        "(offsite copy is not configured), plus Altaro service state. Use it to find which VM an Altaro backup alert "
         "refers to and why it failed (ALTERR codes). Proxmox VMs are backed up by PBS and bare-metal servers "
         "by Bacula, not Altaro."
     ),
@@ -355,8 +355,8 @@ def get_running_backups(host: Optional[str] = None) -> str:
 
 
 @mcp.tool()
-def get_vm_status(host: Optional[str] = None, include_unconfigured: bool = False) -> str:
-    """Get Altaro per-VM status on STEAMHV1/STEAMHV2: last backup result/time/size, next scheduled backup, offsite copy status.
+def get_vm_status(host: Optional[str] = None, include_unconfigured: bool = False, include_offsite: bool = False) -> str:
+    """Get Altaro per-VM status on STEAMHV1/STEAMHV2: last backup result/time/size and next scheduled backup.
 
     Reads the Altaro REST API (same data as the console's dashboard). Unavailable
     while the Altaro console is connected to the host.
@@ -364,6 +364,8 @@ def get_vm_status(host: Optional[str] = None, include_unconfigured: bool = False
     Args:
         host: STEAMHV1 or STEAMHV2. Omit to query both.
         include_unconfigured: Also list Hyper-V VMs not set up for Altaro backup.
+        include_offsite: Add offsite copy fields. Offsite copy is not configured at
+            Steamroller, so these read "Unknown" and are omitted by default.
     """
     result = {}
     for h in _resolve_hosts(host):
@@ -372,7 +374,7 @@ def get_vm_status(host: Optional[str] = None, include_unconfigured: bool = False
         for v in data.get("vms") or []:
             if not (v.get("Configured") or include_unconfigured):
                 continue
-            vms.append({
+            row = {
                 "vm": v.get("VirtualMachineName"),
                 "configured": v.get("Configured"),
                 "last_backup_result": v.get("LastBackupResult"),
@@ -380,10 +382,14 @@ def get_vm_status(host: Optional[str] = None, include_unconfigured: bool = False
                 "last_backup_minutes": round((v.get("LastBackupDuration") or 0) / 60, 1),
                 "last_backup_gb_compressed": round((v.get("LastBackupTransferSizeCompressed") or 0) / 1e9, 2),
                 "next_backup_time": _altaro_time(v.get("NextBackupTime")),
-                "last_offsite_result": v.get("LastOffsiteCopyResult"),
-                "last_offsite_time": _altaro_time(v.get("LastOffsiteCopyTime")),
-                "next_offsite_time": _altaro_time(v.get("NextOffsiteCopyTime")),
-            })
+            }
+            if include_offsite:
+                row.update({
+                    "last_offsite_result": v.get("LastOffsiteCopyResult"),
+                    "last_offsite_time": _altaro_time(v.get("LastOffsiteCopyTime")),
+                    "next_offsite_time": _altaro_time(v.get("NextOffsiteCopyTime")),
+                })
+            vms.append(row)
         result[h] = {"api_error": data.get("api_error"), "vms": sorted(vms, key=lambda x: x["vm"] or "")}
     return json.dumps(result, indent=2)
 
