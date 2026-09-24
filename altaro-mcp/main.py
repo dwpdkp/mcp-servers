@@ -7,6 +7,14 @@ Altaro writes one "Backup Result" event per VM per run to the Application log
 failure can be traced to the specific VM and error code in one call.
 
 Event IDs: 5000 = backup success, 5002 = backup failure, 5003 = verification.
+
+Live job progress and per-VM status come from the Altaro REST API
+(https://localhost:35113/api on each host, called over the same SSH session).
+The API refuses sessions while the Altaro Management Console is connected to
+that host; tools fall back to event-log/checkpoint data and say so.
+API login: env ALTARO_API_USER / ALTARO_API_PASSWORD / ALTARO_API_DOMAIN, or the
+enigma entry named by ALTARO_ENIGMA_KEY (default svc-altaro-mcp-altaro-api).
+The password is sent to the host over SSH stdin, never on a command line.
 """
 
 import base64
@@ -23,8 +31,9 @@ mcp = FastMCP(
     instructions=(
         "Read-only Altaro VM Backup reporting for the work Hyper-V hosts STEAMHV1 and STEAMHV2. "
         "Reads per-VM backup, failure and verification results from the Windows Application event "
-        "log, plus Altaro service state. Use it to find which VM an Altaro backup alert refers to "
-        "and why it failed (ALTERR codes). Proxmox VMs are backed up by PBS and bare-metal servers "
+        "log, live backup progress per VM (percent complete), per-VM last/next backup and offsite "
+        "copy status, plus Altaro service state. Use it to find which VM an Altaro backup alert "
+        "refers to and why it failed (ALTERR codes). Proxmox VMs are backed up by PBS and bare-metal servers "
         "by Bacula, not Altaro."
     ),
 )
@@ -39,6 +48,23 @@ SSH_KEY = os.path.expanduser(os.environ.get("ALTARO_SSH_KEY", "~/.ssh/ansible_wi
 EVENT_KINDS = {5000: "backup_success", 5002: "backup_failed", 5003: "verification"}
 
 _VM_NAME_RE = re.compile(r"^[\w .()\-]{1,100}$")
+_ACCOUNT_RE = re.compile(r"^[\w.\-]{1,64}$")
+
+
+def _api_creds() -> tuple[str, str, str]:
+    """Return (user, password, domain) for the Altaro REST API."""
+    user = os.environ.get("ALTARO_API_USER")
+    password = os.environ.get("ALTARO_API_PASSWORD")
+    domain = os.environ.get("ALTARO_API_DOMAIN", "STEAMR")
+    if not (user and password):
+        key = os.environ.get("ALTARO_ENIGMA_KEY", "svc-altaro-mcp-altaro-api")
+        with open(os.path.expanduser("~/.enigma.json")) as f:
+            entry = json.load(f)[key]
+        user, password = entry["username"], entry["password"]
+        domain = entry.get("domain", domain)
+    if not (_ACCOUNT_RE.match(user) and _ACCOUNT_RE.match(domain)) or "\n" in password:
+        raise ValueError("Altaro API credentials contain unsupported characters")
+    return user, password, domain
 
 
 def _resolve_hosts(host: Optional[str]) -> list[str]:
@@ -56,8 +82,12 @@ def _check_vm(vm: Optional[str]) -> Optional[str]:
     return vm
 
 
-def _ps(host: str, script: str, timeout: int = 90) -> object:
-    """Run a PowerShell script on a Hyper-V host over SSH and parse its JSON output."""
+def _ps(host: str, script: str, timeout: int = 90, stdin: Optional[str] = None) -> object:
+    """Run a PowerShell script on a Hyper-V host over SSH and parse its JSON output.
+
+    `stdin` is readable in the script via [Console]::In.ReadLine(). Without it, ssh
+    gets /dev/null so it can never consume the MCP server's own stdio stream.
+    """
     encoded = base64.b64encode(script.encode("utf-16-le")).decode()
     result = subprocess.run(
         [
@@ -65,6 +95,8 @@ def _ps(host: str, script: str, timeout: int = 90) -> object:
             "-i", SSH_KEY, f"{SSH_USER}@{HOSTS[host]}",
             f"powershell -NoProfile -NonInteractive -EncodedCommand {encoded}",
         ],
+        input=stdin + "\n" if stdin is not None else None,
+        stdin=subprocess.DEVNULL if stdin is None else None,
         capture_output=True,
         text=True,
         timeout=timeout,
@@ -203,33 +235,157 @@ ConvertTo-Json -InputObject @($svc) -Compress
     return json.dumps({h: _ps(h, script) for h in _resolve_hosts(host)}, indent=2)
 
 
+# Shared PowerShell prologue for REST API calls. The password arrives on stdin.
+# The API only listens on https://localhost with a self-signed cert, so cert
+# validation is skipped for that loopback call only.
+_API_PROLOGUE = r"""
+$ProgressPreference = 'SilentlyContinue'
+$pw = [Console]::In.ReadLine()
+[Net.ServicePointManager]::SecurityProtocol = 'Tls12'
+[Net.ServicePointManager]::ServerCertificateValidationCallback = { $true }
+$u = 'https://localhost:35113/api'
+function Start-AltaroSession {
+    $b = @{ ServerAddress = 'localhost'; ServerPort = '35107'; Username = '__USER__'; Password = $pw; Domain = '__DOMAIN__' } | ConvertTo-Json -Compress
+    Invoke-RestMethod -Method Post -Uri "$u/sessions/start" -Body $b -ContentType 'application/json' -TimeoutSec 60
+}
+function Stop-AltaroSession($t) { try { Invoke-RestMethod -Method Post -Uri "$u/sessions/end/$t" -TimeoutSec 30 | Out-Null } catch { } }
+function Get-SessionError($s) {
+    if ($s.ErrorAdditionalDetails -eq 'AnotherConsoleIsRegistered') { 'console_connected' } else { "$($s.ErrorCode): $($s.ErrorAdditionalDetails)" }
+}
+"""
+
+_RUNNING_SCRIPT = r"""
+$out = [ordered]@{ api_error = $null; jobs = @(); checkpoints = @() }
+$now = Get-Date
+$out.checkpoints = @(Get-VMSnapshot -VMName * -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Altaro Temp Checkpoint*' } | ForEach-Object {
+    [pscustomobject]@{ vm = $_.VMName; started = $_.CreationTime.ToString('yyyy-MM-dd HH:mm:ss'); elapsed_minutes = [int]($now - $_.CreationTime).TotalMinutes }
+})
+try {
+    $s = Start-AltaroSession
+    if (-not $s.Success) { $out.api_error = Get-SessionError $s }
+    else {
+        try {
+            $st = Invoke-RestMethod -Uri "$u/activity/operation-status/$($s.Data)" -TimeoutSec 60
+            $vms = (Invoke-RestMethod -Uri "$u/vms/list/$($s.Data)" -TimeoutSec 60).VirtualMachines
+        } finally { Stop-AltaroSession $s.Data }
+        $logDir = 'C:\ProgramData\Altaro\AltaroBackupProfile\Logs'
+        $jh = Get-ChildItem $logDir -Filter 'Altaro.SubAgent*_JobHandler.log' -File -ErrorAction SilentlyContinue
+        $ops = Get-ChildItem "$logDir\OpControllers" -Filter '*_inProgress.log' -File -ErrorAction SilentlyContinue
+        $out.jobs = @(foreach ($j in $st.Statuses) {
+            $vm = $null; $how = $null; $started = $null
+            # Exact: the job handler logs "Concurrency Identifier for <JobId> set to <Hyper-V VM UUID>-<OP>"
+            $m = $jh | Select-String -SimpleMatch "Concurrency Identifier for $($j.JobId) set to" | Select-Object -Last 1
+            if ($m -and $m.Line -match 'set to ([0-9A-Fa-f-]{36})') {
+                $uuid = $Matches[1]
+                $v = $vms | Where-Object { $_.HypervisorVirtualMachineUuid -eq $uuid } | Select-Object -First 1
+                if ($v) { $vm = $v.VirtualMachineName; $how = 'job_handler_log' }
+            }
+            # Fallback: per-job log named "<start>_<Op>_<uuid4>_<VM name>_<jobid4>_inProgress.log"
+            $f = @($ops | Where-Object { $_.Name -like "*_$($j.JobId.Substring(0,4))_inProgress.log" })
+            if ($f.Count -eq 1 -and $f[0].Name -match '^(\d{4}-\d\d-\d\d) (\d\d)-(\d\d)-(\d\d)_[^_]+_[0-9A-Fa-f]{4}_(.+)_[0-9A-Fa-f]{4}_inProgress\.log$') {
+                $started = "$($Matches[1]) $($Matches[2]):$($Matches[3]):$($Matches[4])"
+                if (-not $vm) { $vm = $Matches[5]; $how = 'op_log_filename' }
+            }
+            # Backup Health Monitor: "<start>_DataVerification_<jobid4>_inProgress.log" covers the whole backup location, no VM
+            $scope = 'vm'
+            if ($f.Count -eq 1 -and $f[0].Name -match '^(\d{4}-\d\d-\d\d) (\d\d)-(\d\d)-(\d\d)_DataVerification_[0-9A-Fa-f]{4}_inProgress\.log$') {
+                $started = "$($Matches[1]) $($Matches[2]):$($Matches[3]):$($Matches[4])"
+                $scope = 'backup_location'; $how = 'op_log_filename'
+            }
+            [pscustomobject]@{ vm = $vm; scope = $scope; matched_by = $how; operation = $j.Operation; sub_operation = $j.SubOperation;
+                               percent = $j.Percentage; status = $j.Status; started = $started; job_id = $j.JobId }
+        })
+    }
+} catch { $out.api_error = $_.Exception.Message }
+ConvertTo-Json -InputObject $out -Depth 5 -Compress
+"""
+
+_VM_STATUS_SCRIPT = r"""
+$out = [ordered]@{ api_error = $null; vms = @() }
+try {
+    $s = Start-AltaroSession
+    if (-not $s.Success) { $out.api_error = Get-SessionError $s }
+    else {
+        try { $out.vms = @((Invoke-RestMethod -Uri "$u/vms/list/$($s.Data)" -TimeoutSec 60).VirtualMachines) }
+        finally { Stop-AltaroSession $s.Data }
+    }
+} catch { $out.api_error = $_.Exception.Message }
+ConvertTo-Json -InputObject $out -Depth 4 -Compress
+"""
+
+_CONSOLE_MSG = ("Altaro API refused the session because the Altaro Management Console is "
+                "connected to this host. Close the console for live data.")
+
+
+def _api(host: str, script: str) -> dict:
+    user, password, domain = _api_creds()
+    prologue = _API_PROLOGUE.replace("__USER__", user).replace("__DOMAIN__", domain)
+    data = _ps(host, prologue + script, timeout=180, stdin=password)
+    if not isinstance(data, dict):
+        return {"api_error": "Unexpected output", "detail": str(data)[:300]}
+    if data.get("api_error") == "console_connected":
+        data["api_error"] = _CONSOLE_MSG
+    return data
+
+
+def _altaro_time(value: Optional[str]) -> Optional[str]:
+    """Convert Altaro's '2026-09-24-00-49-38' to '2026-09-24 00:49:38'."""
+    if not value or len(value) != 19:
+        return value
+    return f"{value[:10]} {value[11:13]}:{value[14:16]}:{value[17:19]}"
+
+
 @mcp.tool()
 def get_running_backups(host: Optional[str] = None) -> str:
-    """List Altaro backups currently in progress on STEAMHV1/STEAMHV2 (Hyper-V).
+    """List Altaro backups and verifications in progress on STEAMHV1/STEAMHV2, with percent complete per VM.
 
-    Altaro holds a temporary Hyper-V recovery checkpoint ("Altaro Temp Checkpoint")
-    on each VM while its backup runs, so a VM with one is mid-backup. Returns the
-    VM, when the backup started and elapsed minutes. Percent complete is only
-    available in the Altaro console, not here. A checkpoint that is many hours old
-    likely means a stuck or orphaned backup.
+    Uses the Altaro REST API for live job progress and maps each job to its VM
+    exactly via Altaro's job handler log (JobId to Hyper-V VM UUID), falling back
+    to the per-job log filename. Also lists VMs holding an "Altaro Temp Checkpoint",
+    which is how Altaro marks a VM mid-backup; that list still works when the API
+    is unavailable (e.g. the Altaro console is open on the host). A checkpoint many
+    hours old with no matching job suggests a stuck or orphaned backup. Jobs with
+    scope "backup_location" are the scheduled Backup Health Monitor verifying the
+    whole backup store, not a single VM.
 
     Args:
         host: STEAMHV1 or STEAMHV2. Omit to query both.
     """
-    script = r"""
-$ProgressPreference = 'SilentlyContinue'
-$now = Get-Date
-$cp = Get-VMSnapshot -VMName * -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Altaro Temp Checkpoint*' } | ForEach-Object {
-    [pscustomobject]@{
-        vm = $_.VMName
-        started = $_.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')
-        elapsed_minutes = [int]($now - $_.CreationTime).TotalMinutes
-        checkpoint_type = [string]$_.SnapshotType
-    }
-}
-ConvertTo-Json -InputObject @($cp) -Compress
-"""
-    return json.dumps({h: _ps(h, script) for h in _resolve_hosts(host)}, indent=2)
+    return json.dumps({h: _api(h, _RUNNING_SCRIPT) for h in _resolve_hosts(host)}, indent=2)
+
+
+@mcp.tool()
+def get_vm_status(host: Optional[str] = None, include_unconfigured: bool = False) -> str:
+    """Get Altaro per-VM status on STEAMHV1/STEAMHV2: last backup result/time/size, next scheduled backup, offsite copy status.
+
+    Reads the Altaro REST API (same data as the console's dashboard). Unavailable
+    while the Altaro console is connected to the host.
+
+    Args:
+        host: STEAMHV1 or STEAMHV2. Omit to query both.
+        include_unconfigured: Also list Hyper-V VMs not set up for Altaro backup.
+    """
+    result = {}
+    for h in _resolve_hosts(host):
+        data = _api(h, _VM_STATUS_SCRIPT)
+        vms = []
+        for v in data.get("vms") or []:
+            if not (v.get("Configured") or include_unconfigured):
+                continue
+            vms.append({
+                "vm": v.get("VirtualMachineName"),
+                "configured": v.get("Configured"),
+                "last_backup_result": v.get("LastBackupResult"),
+                "last_backup_time": _altaro_time(v.get("LastBackupTime")),
+                "last_backup_minutes": round((v.get("LastBackupDuration") or 0) / 60, 1),
+                "last_backup_gb_compressed": round((v.get("LastBackupTransferSizeCompressed") or 0) / 1e9, 2),
+                "next_backup_time": _altaro_time(v.get("NextBackupTime")),
+                "last_offsite_result": v.get("LastOffsiteCopyResult"),
+                "last_offsite_time": _altaro_time(v.get("LastOffsiteCopyTime")),
+                "next_offsite_time": _altaro_time(v.get("NextOffsiteCopyTime")),
+            })
+        result[h] = {"api_error": data.get("api_error"), "vms": sorted(vms, key=lambda x: x["vm"] or "")}
+    return json.dumps(result, indent=2)
 
 
 if __name__ == "__main__":
