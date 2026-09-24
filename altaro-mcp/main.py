@@ -203,5 +203,34 @@ ConvertTo-Json -InputObject @($svc) -Compress
     return json.dumps({h: _ps(h, script) for h in _resolve_hosts(host)}, indent=2)
 
 
+@mcp.tool()
+def get_running_backups(host: Optional[str] = None) -> str:
+    """List Altaro backups currently in progress on STEAMHV1/STEAMHV2 (Hyper-V).
+
+    Altaro holds a temporary Hyper-V recovery checkpoint ("Altaro Temp Checkpoint")
+    on each VM while its backup runs, so a VM with one is mid-backup. Returns the
+    VM, when the backup started and elapsed minutes. Percent complete is only
+    available in the Altaro console, not here. A checkpoint that is many hours old
+    likely means a stuck or orphaned backup.
+
+    Args:
+        host: STEAMHV1 or STEAMHV2. Omit to query both.
+    """
+    script = r"""
+$ProgressPreference = 'SilentlyContinue'
+$now = Get-Date
+$cp = Get-VMSnapshot -VMName * -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'Altaro Temp Checkpoint*' } | ForEach-Object {
+    [pscustomobject]@{
+        vm = $_.VMName
+        started = $_.CreationTime.ToString('yyyy-MM-dd HH:mm:ss')
+        elapsed_minutes = [int]($now - $_.CreationTime).TotalMinutes
+        checkpoint_type = [string]$_.SnapshotType
+    }
+}
+ConvertTo-Json -InputObject @($cp) -Compress
+"""
+    return json.dumps({h: _ps(h, script) for h in _resolve_hosts(host)}, indent=2)
+
+
 if __name__ == "__main__":
     mcp.run()
