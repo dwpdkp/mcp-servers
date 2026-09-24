@@ -9,7 +9,16 @@ from typing import Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("Bacularis")
+mcp = FastMCP(
+    "Bacularis",
+    instructions=(
+        "Read-only Bacula backup reporting via the Bacularis REST API on the work Bacula Director "
+        "(SRA-BACULA-01). Covers job history, job logs, backed-up file lists, clients, pools, volumes, "
+        "and storage daemons. Bacula backs up bare-metal servers only; Proxmox VMs use PBS and Hyper-V "
+        "VMs use Altaro. For live running-job byte counts or actions (run, cancel, prune, purge), use "
+        "the bconsole server instead."
+    ),
+)
 
 BACULARIS_URL = os.environ.get("BACULARIS_URL", "http://10.100.0.42:9097")
 BACULARIS_USER = os.environ.get("BACULARIS_USER", "")
@@ -47,7 +56,9 @@ def get_jobs(
     client: Optional[str] = None,
     level: Optional[str] = None,
 ) -> str:
-    """List backup jobs with optional filters.
+    """List Bacula backup jobs (history from the catalog) with optional filters by job name, status, client, or level.
+
+    For live running jobs or to start/cancel a job, use bconsole instead.
 
     WARNING: This reads the Bacula catalog (MariaDB), which the Director
     only writes to periodically while a job is running and finalizes at
@@ -79,7 +90,7 @@ def get_jobs(
 
 @mcp.tool()
 def get_job(jobid: int) -> str:
-    """Get details for a specific job by its JobId.
+    """Get details for a specific Bacula job by its JobId (status, level, bytes, files, start/end time).
 
     WARNING: Reads the catalog, not live Director state. For a currently
     running job this can show jobbytes=0/volsessionid=0 even while real data
@@ -97,7 +108,7 @@ def get_job(jobid: int) -> str:
 
 @mcp.tool()
 def get_job_files(jobid: int, limit: int = 100, offset: int = 0, search: Optional[str] = None) -> str:
-    """List files and directories backed up in a specific job.
+    """List files and directories backed up in a specific Bacula job, to confirm what was captured or find a file to restore.
 
     Args:
         jobid: The Bacula job ID
@@ -113,13 +124,13 @@ def get_job_files(jobid: int, limit: int = 100, offset: int = 0, search: Optiona
 
 @mcp.tool()
 def get_job_totals() -> str:
-    """Get total bytes and files across all backup jobs."""
+    """Get total bytes and files across all Bacula backup jobs in the catalog."""
     return _get("/jobs/totals")
 
 
 @mcp.tool()
 def get_job_log(jobid: int) -> str:
-    """Get the actual job log (status/error messages) for a specific job.
+    """Get the Bacula job log (status and error messages) for a specific job, to diagnose why a backup failed.
 
     Args:
         jobid: The Bacula job ID
@@ -132,7 +143,7 @@ def get_job_log(jobid: int) -> str:
 
 @mcp.tool()
 def get_clients(limit: int = 100) -> str:
-    """List all backup clients (file daemons).
+    """List all Bacula backup clients (file daemons / bacula-fd hosts).
 
     Args:
         limit: Max clients to return (default 100)
@@ -142,7 +153,7 @@ def get_clients(limit: int = 100) -> str:
 
 @mcp.tool()
 def get_client(clientid: int) -> str:
-    """Get details for a specific backup client.
+    """Get details for a specific Bacula backup client (file daemon).
 
     Args:
         clientid: The Bacula client ID
@@ -152,7 +163,7 @@ def get_client(clientid: int) -> str:
 
 @mcp.tool()
 def get_client_jobs(clientid: int) -> str:
-    """List all jobs for a specific client.
+    """List all Bacula jobs for a specific client, i.e. backup history for one host.
 
     Args:
         clientid: The Bacula client ID
@@ -165,7 +176,7 @@ def get_client_jobs(clientid: int) -> str:
 
 @mcp.tool()
 def get_volumes(limit: int = 100) -> str:
-    """List all backup volumes (tapes/disk volumes).
+    """List all Bacula backup volumes (disk or tape media) with status, bytes, and retention.
 
     Args:
         limit: Max volumes to return (default 100)
@@ -175,13 +186,13 @@ def get_volumes(limit: int = 100) -> str:
 
 @mcp.tool()
 def get_pools() -> str:
-    """List all backup pools."""
+    """List all Bacula backup pools (Full, Incremental, Differential, offsite/Wasabi copy pools)."""
     return _get("/pools")
 
 
 @mcp.tool()
 def get_pool_volumes(poolid: int) -> str:
-    """List all volumes in a specific pool.
+    """List all Bacula volumes in a specific pool.
 
     Args:
         poolid: The Bacula pool ID
@@ -194,13 +205,13 @@ def get_pool_volumes(poolid: int) -> str:
 
 @mcp.tool()
 def get_storages() -> str:
-    """List all storage daemons."""
+    """List all Bacula storage daemons (bacula-sd)."""
     return _get("/storages")
 
 
 @mcp.tool()
 def get_storage_status(storageid: int) -> str:
-    """Get status of a specific storage daemon.
+    """Get status of a specific Bacula storage daemon (bacula-sd), including devices and capacity.
 
     Args:
         storageid: The Bacula storage ID
