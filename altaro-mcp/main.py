@@ -13,7 +13,8 @@ Live job progress and per-VM status come from the Altaro REST API
 The API refuses sessions while the Altaro Management Console is connected to
 that host; tools fall back to event-log/checkpoint data and say so.
 API login: env ALTARO_API_USER / ALTARO_API_PASSWORD / ALTARO_API_DOMAIN, or the
-enigma entry named by ALTARO_ENIGMA_KEY (default svc-altaro-mcp-altaro-api).
+enigma entry named by ALTARO_ENIGMA_KEY (default svc-altaro-mcp-altaro-api) in
+$ENIGMA_PATH or ~/.enigma.json.
 The password is sent to the host over SSH stdin, never on a command line.
 """
 
@@ -58,8 +59,12 @@ def _api_creds() -> tuple[str, str, str]:
     domain = os.environ.get("ALTARO_API_DOMAIN", "STEAMR")
     if not (user and password):
         key = os.environ.get("ALTARO_ENIGMA_KEY", "svc-altaro-mcp-altaro-api")
-        with open(os.path.expanduser("~/.enigma.json")) as f:
-            entry = json.load(f)[key]
+        path = os.path.expanduser(os.environ.get("ENIGMA_PATH") or "~/.enigma.json")
+        with open(path) as f:
+            store = json.load(f)
+        entry = store.get(key) or store.get(store.get("_aliases", {}).get(key, ""))
+        if not isinstance(entry, dict) or not {"username", "password"} <= entry.keys():
+            raise ValueError(f"enigma key {key!r} missing or lacks username/password in {path}")
         user, password = entry["username"], entry["password"]
         domain = entry.get("domain", domain)
     if not (_ACCOUNT_RE.match(user) and _ACCOUNT_RE.match(domain)) or "\n" in password:
