@@ -10,11 +10,15 @@ MCP server for real-time Bacula Director access via `bconsole` over SSH. Unlike 
 
 ## Configuration
 
-Connection details are hardcoded at the top of `main.py` rather than read from environment variables:
+Connection details live at the top of `main.py`. Two can be overridden from the environment:
+
+| Env var | Default | Description |
+|---|---|---|
+| `BCONSOLE_SSH_HOST` | `sra-bacula-01` | SSH host running the Bacula Director |
+| `BCONSOLE_SSH_USER` | unset (ssh config decides) | Login passed as `ssh -l`; needs passwordless sudo for bconsole. The Mac sets `doug.pearson`, since its key is not on the shared `ansible` account |
 
 | Constant | Value | Description |
 |---|---|---|
-| `BACULA_HOST` | `sra-bacula-01` | SSH host running the Bacula Director |
 | `BCONSOLE_CMD` | `sudo bconsole` | Command piped commands over stdin |
 | `STORAGE_PATHS` | `{"File1": "/mnt/nas/bacula", "PlasticFile1": "/mnt/nas/plastic-bacula"}` | Storage device archive paths |
 | `MEDIATYPE_STORAGE` | `{"File1": "File1", "PlasticFile": "PlasticFile1"}` | MediaType → storage name mapping |

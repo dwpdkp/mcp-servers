@@ -6,6 +6,7 @@ running jobs), this server runs `status director` directly in the Director's
 memory, giving accurate real-time byte counts for running jobs.
 """
 
+import os
 import re
 import subprocess
 from typing import Optional
@@ -14,8 +15,14 @@ from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("bconsole")
 
-BACULA_HOST = "sra-bacula-01"
+BACULA_HOST = os.environ.get("BCONSOLE_SSH_HOST", "sra-bacula-01")
+# Optional login override; unset means whatever ~/.ssh/config gives BACULA_HOST.
+# The account needs passwordless sudo for bconsole.
+BACULA_SSH_USER = os.environ.get("BCONSOLE_SSH_USER")
 BCONSOLE_CMD = "sudo bconsole"
+SSH_BASE = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] + (
+    ["-l", BACULA_SSH_USER] if BACULA_SSH_USER else []
+)
 
 # Storage device archive paths — used for physical file truncation
 STORAGE_PATHS = {
@@ -69,7 +76,7 @@ def _run(commands: list[str], timeout: int = 30) -> tuple[str, str]:
     """Send commands to bconsole on BACULA_HOST via SSH. Returns (stdout, stderr)."""
     input_str = "\n".join(commands) + "\nquit\n"
     result = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", BACULA_HOST, BCONSOLE_CMD],
+        SSH_BASE + [BACULA_HOST, BCONSOLE_CMD],
         input=input_str,
         capture_output=True,
         text=True,
@@ -81,7 +88,7 @@ def _run(commands: list[str], timeout: int = 30) -> tuple[str, str]:
 def _ssh(command: str, timeout: int = 60) -> tuple[str, str]:
     """Run a shell command directly on BACULA_HOST via SSH (not bconsole)."""
     result = subprocess.run(
-        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", BACULA_HOST, command],
+        SSH_BASE + [BACULA_HOST, command],
         capture_output=True,
         text=True,
         timeout=timeout,
