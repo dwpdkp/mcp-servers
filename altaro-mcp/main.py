@@ -13,7 +13,7 @@ Live job progress and per-VM status come from the Altaro REST API
 The API refuses sessions while the Altaro Management Console is connected to
 that host; tools fall back to event-log/checkpoint data and say so.
 API login: env ALTARO_API_USER / ALTARO_API_PASSWORD / ALTARO_API_DOMAIN, or the
-enigma entry named by ALTARO_ENIGMA_KEY (default svc-altaro-mcp-altaro-api) in
+enigma entry named by ALTARO_ENIGMA_KEY (default svc-altaro-api) in
 $ENIGMA_PATH or ~/.enigma.json.
 The password is sent to the host over SSH stdin, never on a command line.
 """
@@ -58,7 +58,7 @@ def _api_creds() -> tuple[str, str, str]:
     password = os.environ.get("ALTARO_API_PASSWORD")
     domain = os.environ.get("ALTARO_API_DOMAIN", "STEAMR")
     if not (user and password):
-        key = os.environ.get("ALTARO_ENIGMA_KEY", "svc-altaro-mcp-altaro-api")
+        key = os.environ.get("ALTARO_ENIGMA_KEY", "svc-altaro-api")
         path = os.path.expanduser(os.environ.get("ENIGMA_PATH") or "~/.enigma.json")
         with open(path) as f:
             store = json.load(f)
