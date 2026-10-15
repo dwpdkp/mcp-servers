@@ -18,7 +18,7 @@ uv pip install mcp httpx
 | `BACULARIS_USER` | Yes | Bacularis API username |
 | `BACULARIS_PASSWORD` | Yes | Bacularis API password |
 
-**Credential:** Enigma entry `22178` (mcp-service account on SRA-BACULA-01).
+**Credential:** Enigma entry `sra-bacularis-api` (22178, svc-bacularis-api account on SRA-BACULA-01, renamed from mcp-service 2026-10-15).
 
 ## MCP Client Configuration
 
@@ -30,7 +30,7 @@ Add to `.mcp.json`:
   "args": ["/path/to/bacularis-mcp/main.py"],
   "env": {
     "BACULARIS_URL": "http://your-bacularis-server:9097",
-    "BACULARIS_USER": "mcp-service",
+    "BACULARIS_USER": "svc-bacularis-api",
     "BACULARIS_PASSWORD": "see enigma 22178"
   }
 }
