@@ -22,6 +22,12 @@ from proxmox_mcp.core.sanitization import sanitize_identifier, sanitize_vmid
 from proxmox_mcp.server import mcp
 from proxmox_mcp.tools import safety_checked
 
+# Ceiling for SSH command execution. On timeout the subprocess is killed and a
+# clean ToolError is returned to the client instead of letting an unhandled
+# TimeoutError propagate, which previously crashed the whole MCP server
+# process (seen as "Connection closed" on the client, requiring a reconnect).
+EXEC_TIMEOUT_SECONDS = 90
+
 # node_exec is capped to read-only diagnostics — no qm/pct set, no destroy,
 # no shutdown. Mutating changes go through update_instance_config or
 # power_control instead, which carry their own safety tiers. Patterns are
@@ -70,7 +76,17 @@ async def execute_lxc_command(node: str, vmid: int, command: str, confirmed: boo
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=EXEC_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ToolError(
+            f"Command timed out after {EXEC_TIMEOUT_SECONDS}s: {command!r} on vmid {safe_vmid}"
+            f" ({safe_node}). Long-blocking commands, such as systemctl restart or stop against a"
+            " hung unit, can exceed this. Prefer a non-blocking sequence instead, such as"
+            " pkill -9 -f <proc>, then systemctl reset-failed <unit>, then systemctl start <unit>."
+        ) from None
 
     return {
         "vmid": safe_vmid,
@@ -122,7 +138,14 @@ async def node_exec(node: str, command: str) -> dict:
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+    try:
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=EXEC_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        raise ToolError(
+            f"Command timed out after {EXEC_TIMEOUT_SECONDS}s: {command!r} on {safe_node}."
+        ) from None
 
     return {
         "node": safe_node,
