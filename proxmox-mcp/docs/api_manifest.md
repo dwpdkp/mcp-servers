@@ -235,13 +235,13 @@ Returns the current configuration (CPU, RAM, Network, etc.) of the specific inst
 (e.g. an online disk resize) was dispatched as an async task.
 
 ### Safety Tier
-Restricted — requires `confirmed=true`. Not in `safe_tools`.
+Restricted - requires `confirmed=true`. Not in `safe_tools`.
 
 ---
 
 ## Tool: `node_exec`
 **MCP Tool Name:** `node_exec`
-**Mechanism:** SSH to the node as `PROXMOX_SSH_USER` (sudo), no REST endpoint —
+**Mechanism:** SSH to the node as `PROXMOX_SSH_USER` (sudo), no REST endpoint -
 the Proxmox API has no generic host-shell endpoint.
 
 ### Parameters
@@ -255,9 +255,9 @@ the Proxmox API has no generic host-shell endpoint.
 `pvesm status`, `zpool status/list`, `df`, `free`, `uptime`, `uname`.
 
 ### Safety Tier
-Safe — in `safe_tools`, no `confirmed=true` needed, because the allowlist
+Safe - in `safe_tools`, no `confirmed=true` needed, because the allowlist
 itself is the safety boundary. Anything not matching raises `ToolError`
-regardless of `confirmed`. There is deliberately no bypass for this tool —
+regardless of `confirmed`. There is deliberately no bypass for this tool -
 mutating changes must go through `update_instance_config` or `power_control`.
 
 ---

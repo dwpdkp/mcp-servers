@@ -38,7 +38,7 @@ pytest                              # Run tests
 
 Use feature branches with PRs for every unit of work:
 
-1. `git checkout -b feat/<topic>` — branch off main before starting
+1. `git checkout -b feat/<topic>`: branch off main before starting
 2. Work, then `/commit` when done
 3. Push and open a PR: `git push -u origin HEAD && gh pr create`
 4. Review the diff locally (`git diff main`) or on GitHub
