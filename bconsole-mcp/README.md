@@ -54,6 +54,7 @@ Mutating tools require an explicit `confirm=true` argument. Omitting it (or pass
 |---|---|
 | `run_job` | Start a Bacula backup job immediately by exact job name, optional level/client override; requires `confirm=true` |
 | `cancel_job` | Cancel a running or queued job by job ID; requires `confirm=true`; verify the job is actually a zombie with `list_running_jobs` first |
+| `reload_director` | Reload the Director config (`reload`); requires `confirm=true`. Running jobs keep their old config; a bad config is rejected and the old one stays. Validate first with `bacula-dir -t` on the host |
 
 ### Catalog Maintenance
 
@@ -75,13 +76,13 @@ Mutating tools require an explicit `confirm=true` argument. Omitting it (or pass
 
 ### Confirmation gates
 
-`run_job`, `cancel_job`, `purge_volume`, and `prune_all` require an explicit `confirm: bool = True` argument. Calling one without `confirm=true` raises a `ValueError` describing the action and asking the caller to get explicit user approval first. No command is sent to bconsole in that case.
+`run_job`, `cancel_job`, `reload_director`, `purge_volume`, and `prune_all` require an explicit `confirm: bool = True` argument. Calling one without `confirm=true` raises a `ValueError` describing the action and asking the caller to get explicit user approval first. No command is sent to bconsole in that case.
 
 `prune_client` is deliberately **not** confirm-gated: it only removes catalog records that have already exceeded their retention period, never active job data or physical files.
 
 ### `console()` verb allowlist
 
-`console()` is a read-only escape hatch for bconsole queries not covered by a dedicated tool. It only permits these verbs: `status`, `list`, `llist`, `show`, `help`, `version`, `.api`, `messages`, `query`, `estimate`. Any other verb (`run`, `purge`, `prune`, `cancel`, `delete`, `label`, `mount`, `sql`, etc.) is rejected with a message pointing to the dedicated, confirm-gated tool instead. This closes the loophole where an agent could otherwise bypass every confirm gate above by calling `console("run job=...")` or `console("purge volume=...")` directly.
+`console()` is a read-only escape hatch for bconsole queries not covered by a dedicated tool. It only permits these verbs: `status`, `list`, `llist`, `show`, `help`, `version`, `.api`, `messages`, `query`, `estimate`. Any other verb (`run`, `reload`, `purge`, `prune`, `cancel`, `delete`, `label`, `mount`, `sql`, etc.) is rejected with a message pointing to the dedicated, confirm-gated tool instead. This closes the loophole where an agent could otherwise bypass every confirm gate above by calling `console("run job=...")` or `console("purge volume=...")` directly.
 
 ### Command-injection protection
 
@@ -103,3 +104,4 @@ MIT
 | Date | Author | Changes |
 |------|--------|---------|
 | 2026-07-14 | Doug Pearson | Initial creation: documents confirm-gate security hardening (run_job, cancel_job, purge_volume, prune_all), the console() read-only verb allowlist, and the bconsole stdin command-injection fix |
+| 2026-11-17 | Doug Pearson | Added confirm-gated `reload_director` tool |

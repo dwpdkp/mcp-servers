@@ -342,6 +342,29 @@ def run_job(
 
 
 @mcp.tool()
+def reload_director(confirm: bool = False) -> str:
+    """Reload the Bacula Director configuration (bconsole `reload`).
+
+    Running jobs keep the config they started with; new jobs pick up the
+    reloaded config. If the new config has an error the Director rejects the
+    reload and keeps the old config, and the error text is returned.
+    Validate first on the host with `bacula-dir -t -c bacula-dir.conf`.
+
+    Args:
+        confirm: Must be true to reload. Ask the user for permission first.
+    """
+    _require_confirm(confirm, "reload_director()")
+    stdout, stderr = _run(["reload"])
+    if not stdout:
+        return f"Error: {stderr[:200]}"
+    lines = [
+        ln.strip() for ln in stdout.splitlines()
+        if ln.strip() and not ln.startswith(("Connecting", "1000 OK", "Enter a period", "reload", "You have messages"))
+    ]
+    return "\n".join(lines) if lines else "Reload OK (no errors reported)"
+
+
+@mcp.tool()
 def purge_volume(volume_name: str, confirm: bool = False) -> str:
     """Purge all job records for a volume from the Bacula catalog.
 
@@ -549,7 +572,7 @@ def console(command: str) -> str:
         raise ValueError(
             f"SECURITY: console() only allows read-only verbs {sorted(_CONSOLE_ALLOWED_VERBS)}. "
             f"'{verb}' is not permitted here. If this is a mutating action, use its "
-            "dedicated tool (run_job, purge_volume, prune_client, prune_all, cancel_job), "
+            "dedicated tool (run_job, reload_director, purge_volume, prune_client, prune_all, cancel_job), "
             "which requires explicit confirmation."
         )
     stdout, stderr = _run([command], timeout=60)
