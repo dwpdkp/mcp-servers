@@ -103,7 +103,7 @@ Mutating tools require an explicit `confirm=true` argument. Omitting it (or pass
 
 ## Security
 
-All `_id` parameters are validated against a strict `^[a-f0-9]{24}$` pattern (MongoDB ObjectID format) before being interpolated into URL paths. Any value containing path traversal characters (`/`, `..`, `%`, `?`, `#`) or that doesn't match the 24-character hex format is rejected with a `ValueError` before any HTTP request is made.
+All `_id` parameters must fully match either a 24-character hex MongoDB ObjectID or a lowercase UUID (zone-based firewall policies and zones use UUIDs) before being interpolated into URL paths. Any value containing path traversal characters (`/`, `..`, `%`, `?`, `#`), a trailing newline, or anything else outside those two formats is rejected with a `ValueError` before any HTTP request is made.
 
 ### Confirmation gates
 

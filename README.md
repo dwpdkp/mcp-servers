@@ -24,7 +24,7 @@ Several of the in-house servers (proxmox-mcp, unifi-mcp, zabbix-mcp, bconsole-mc
 
 Where relevant, additional hardening was layered on top of confirmation gates:
 
-- **Input validation**: RFC1918/port-range checks on unifi-mcp port forwards; strict ObjectID pattern checks on all UniFi `_id` params; VMID/identifier sanitization in proxmox-mcp
+- **Input validation**: RFC1918/port-range checks on unifi-mcp port forwards; strict ObjectID/UUID pattern checks on all UniFi `_id` params; VMID/identifier sanitization in proxmox-mcp
 - **Fail-closed TLS**: proxmox-mcp requires a second explicit opt-in (`PROXMOX_ALLOW_INSECURE_TLS`) to actually disable certificate verification, rather than silently downgrading on `PROXMOX_VERIFY_SSL=false`
 - **Command-injection protection**: bconsole-mcp rejects any caller-controlled value containing a newline before it can reach bconsole's SSH-piped stdin REPL
 - **Escape-hatch allowlisting**: bconsole-mcp's raw `console()` passthrough is restricted to read-only verbs, closing the loophole where it could otherwise bypass every other tool's confirm gate
