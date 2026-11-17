@@ -38,13 +38,16 @@ def _v2(path: str) -> str:
     return f"{UNIFI_URL}/proxy/network/v2/api/site/{UNIFI_SITE}{path}"
 
 
-# UniFi resource IDs are 24-char hex MongoDB ObjectIDs. Validate before interpolating
-# into URL paths to prevent path traversal (e.g. "../../admin").
-_ID_RE = re.compile(r"^[a-f0-9]{24}$")
+# UniFi resource IDs are 24-char hex MongoDB ObjectIDs, except zone-based firewall
+# policies and zones on newer Network apps, which use UUIDs. Validate before
+# interpolating into URL paths to prevent path traversal (e.g. "../../admin").
+_ID_RE = re.compile(
+    r"[a-f0-9]{24}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+)
 
 def _safe_id(value: str, name: str = "id") -> str:
-    if not _ID_RE.match(value):
-        raise ValueError(f"Invalid {name} format: must be a 24-character hex string")
+    if not _ID_RE.fullmatch(value):
+        raise ValueError(f"Invalid {name} format: must be a 24-character hex ID or a UUID")
     return value
 
 
