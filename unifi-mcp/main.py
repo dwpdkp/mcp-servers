@@ -88,13 +88,14 @@ def _validate_port_list(value: str, name: str) -> str:
     return ",".join(parts)
 
 
-def _apply_port(side: dict[str, Any], port: str | None, name: str) -> None:
+def _apply_port(side: dict[str, Any], port: str | int | None, name: str) -> None:
     """Set or clear port matching on a policy source/destination block.
 
     None leaves the side unchanged; "any" (case-insensitive) clears port matching.
     """
     if port is None:
         return
+    port = str(port)
     if port.strip().lower() == "any":
         side["port_matching_type"] = "ANY"
         side.pop("port", None)
@@ -331,8 +332,8 @@ async def update_firewall_policy(
     logging: bool | None = None,
     protocol: str | None = None,
     ip_version: str | None = None,
-    src_port: str | None = None,
-    dst_port: str | None = None,
+    src_port: str | int | None = None,
+    dst_port: str | int | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Update an existing firewall policy by its _id.
@@ -356,8 +357,8 @@ async def update_firewall_policy(
     _require_confirm(confirm, f"update_firewall_policy({policy_id})")
     _safe_id(policy_id, "policy_id")
     for val, label in ((src_port, "src_port"), (dst_port, "dst_port")):
-        if val is not None and val.strip().lower() != "any":
-            _validate_port_list(val, label)
+        if val is not None and str(val).strip().lower() != "any":
+            _validate_port_list(str(val), label)
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
         r.raise_for_status()
@@ -409,8 +410,8 @@ async def create_firewall_policy(
     logging: bool = False,
     create_allow_respond: bool = True,
     connection_state_type: str = "ALL",
-    src_port: str | None = None,
-    dst_port: str | None = None,
+    src_port: str | int | None = None,
+    dst_port: str | int | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Create a new firewall policy (zone-based rule, UniFi OS 3+ / UCG).
