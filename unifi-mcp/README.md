@@ -77,8 +77,8 @@ Mutating tools require an explicit `confirm=true` argument. Omitting it (or pass
 |---|---|
 | `list_firewall_policies` | Zone-based firewall rules; filter by `include_predefined` and `action_filter` (`ALLOW`/`BLOCK`) |
 | `get_firewall_policy` | Fetch a single policy by `_id` (returns full raw object for inspection before editing) |
-| `create_firewall_policy` | Create a new zone-based rule: src/dst zone + network targeting, action, protocol, auto-respond; requires `confirm=true` |
-| `update_firewall_policy` | Update a policy by `_id`: name, action, enabled, logging, protocol, ip_version; requires `confirm=true` |
+| `create_firewall_policy` | Create a new zone-based rule: src/dst zone + network targeting, action, protocol, `src_port`/`dst_port` (e.g. `"80,443"`, `"8000-8090"`), auto-respond; requires `confirm=true` |
+| `update_firewall_policy` | Update a policy by `_id`: name, action, enabled, logging, protocol, ip_version, `src_port`/`dst_port` (`"any"` clears); ports need protocol tcp, udp or tcp_udp; requires `confirm=true` |
 | `set_firewall_policy_logging` | Enable or disable logging on a specific policy by `_id` |
 | `set_block_rules_logging` | Bulk enable/disable logging on all custom BLOCK rules at once |
 | `list_firewall_groups` | Address and port groups used as rule sources/destinations |

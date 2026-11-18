@@ -75,6 +75,34 @@ def _validate_port_spec(value: str, name: str) -> None:
             raise ValueError(f"Invalid {name}: port {p} out of range (1-65535)")
 
 
+_PORT_PROTOCOLS = ("tcp", "udp", "tcp_udp")
+
+
+def _validate_port_list(value: str, name: str) -> str:
+    """Validate a comma-separated list of ports/ranges (e.g. '53', '80,443', '8000-8090')."""
+    parts = [p.strip() for p in value.split(",") if p.strip()]
+    if not parts:
+        raise ValueError(f"Invalid {name}: empty port list")
+    for p in parts:
+        _validate_port_spec(p, name)
+    return ",".join(parts)
+
+
+def _apply_port(side: dict[str, Any], port: str | None, name: str) -> None:
+    """Set or clear port matching on a policy source/destination block.
+
+    None leaves the side unchanged; "any" (case-insensitive) clears port matching.
+    """
+    if port is None:
+        return
+    if port.strip().lower() == "any":
+        side["port_matching_type"] = "ANY"
+        side.pop("port", None)
+        return
+    side["port_matching_type"] = "SPECIFIC"
+    side["port"] = _validate_port_list(port, name)
+
+
 def _validate_ip_or_cidr(value: str, name: str) -> None:
     try:
         ipaddress.ip_network(value, strict=False)
@@ -129,9 +157,11 @@ def _summarize_policy(p: dict[str, Any]) -> dict[str, Any]:
         "src_zone_id": src.get("zone_id"),
         "src_ips": src.get("ips", []),
         "src_target": src.get("matching_target", "ANY"),
+        "src_port": src.get("port", "any") if src.get("port_matching_type") == "SPECIFIC" else "any",
         "dst_zone_id": dst.get("zone_id"),
         "dst_ips": dst.get("ips", []),
         "dst_target": dst.get("matching_target", "ANY"),
+        "dst_port": dst.get("port", "any") if dst.get("port_matching_type") == "SPECIFIC" else "any",
         "schedule": p.get("schedule", {}).get("mode", "ALWAYS"),
     }
 
@@ -301,6 +331,8 @@ async def update_firewall_policy(
     logging: bool | None = None,
     protocol: str | None = None,
     ip_version: str | None = None,
+    src_port: str | None = None,
+    dst_port: str | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Update an existing firewall policy by its _id.
@@ -316,10 +348,16 @@ async def update_firewall_policy(
         logging: Enable or disable logging for matched traffic.
         protocol: Protocol to match — "all", "tcp", "udp", "tcp_udp", "icmp", "icmpv6".
         ip_version: "IPV4", "IPV6", or "BOTH".
+        src_port: Source port(s): "53", "80,443", "8000-8090", or "any" to clear. Rarely needed.
+        dst_port: Destination port(s): "53", "80,443", "8000-8090", or "any" to clear.
+            Port matching requires protocol "tcp", "udp" or "tcp_udp".
         confirm: Must be true to apply the change. Ask the user for permission first.
     """
     _require_confirm(confirm, f"update_firewall_policy({policy_id})")
     _safe_id(policy_id, "policy_id")
+    for val, label in ((src_port, "src_port"), (dst_port, "dst_port")):
+        if val is not None and val.strip().lower() != "any":
+            _validate_port_list(val, label)
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.get(_v2(f"/firewall-policies/{policy_id}"), headers=_headers())
         r.raise_for_status()
@@ -337,6 +375,15 @@ async def update_firewall_policy(
             policy["protocol"] = protocol
         if ip_version is not None:
             policy["ip_version"] = ip_version.upper()
+        _apply_port(policy.setdefault("source", {}), src_port, "src_port")
+        _apply_port(policy.setdefault("destination", {}), dst_port, "dst_port")
+        uses_ports = any(
+            policy.get(s, {}).get("port_matching_type") == "SPECIFIC" for s in ("source", "destination")
+        )
+        if uses_ports and policy.get("protocol") not in _PORT_PROTOCOLS:
+            raise ValueError(
+                f"Port matching needs protocol tcp, udp or tcp_udp (policy is {policy.get('protocol')!r})"
+            )
 
         r2 = await c.put(_v2(f"/firewall-policies/{policy_id}"), headers=_headers(), json=policy)
         r2.raise_for_status()
@@ -362,6 +409,8 @@ async def create_firewall_policy(
     logging: bool = False,
     create_allow_respond: bool = True,
     connection_state_type: str = "ALL",
+    src_port: str | None = None,
+    dst_port: str | None = None,
     confirm: bool = False,
 ) -> dict[str, Any]:
     """Create a new firewall policy (zone-based rule, UniFi OS 3+ / UCG).
@@ -397,8 +446,13 @@ async def create_firewall_policy(
         create_allow_respond: For ALLOW rules, also auto-create the reverse RESPOND_ONLY rule so
             return traffic isn't separately blocked (default True — matches UniFi UI default).
         connection_state_type: "ALL", "NEW", "ESTABLISHED", "RESPOND_ONLY", or "CUSTOM" (default "ALL").
+        src_port: Source port(s), e.g. "53", "80,443", "8000-8090". Omit for any. Rarely needed.
+        dst_port: Destination port(s), e.g. "53", "80,443", "8000-8090". Omit for any.
+            Port matching requires protocol "tcp", "udp" or "tcp_udp".
         confirm: Must be true to create the rule. Ask the user for permission first.
     """
+    if (src_port or dst_port) and protocol.lower() not in _PORT_PROTOCOLS:
+        raise ValueError("Port matching needs protocol tcp, udp or tcp_udp")
     _require_confirm(confirm, f"create_firewall_policy({name!r})")
     _safe_id(src_zone_id, "src_zone_id")
     _safe_id(dst_zone_id, "dst_zone_id")
@@ -448,6 +502,8 @@ async def create_firewall_policy(
             **({"matching_target_type": "SPECIFIC", "match_opposite_ips": False} if dst_target.upper() == "IP" else {}),
         },
     }
+    _apply_port(payload["source"], src_port, "src_port")
+    _apply_port(payload["destination"], dst_port, "dst_port")
     async with httpx.AsyncClient(verify=VERIFY_SSL, timeout=15) as c:
         r = await c.post(_v2("/firewall-policies"), headers=_headers(), json=payload)
         r.raise_for_status()
