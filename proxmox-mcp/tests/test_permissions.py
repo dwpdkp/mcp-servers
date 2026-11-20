@@ -84,6 +84,10 @@ class TestGetRequiredPermission:
         url = f"{BASE_URL}/nodes/pve1/lxc/100/snapshot/snap1/rollback"
         assert get_required_permission("POST", url, BASE_URL) == "VM.Snapshot"
 
+    def test_delete_snapshot(self):
+        url = f"{BASE_URL}/nodes/pve1/lxc/100/snapshot/snap1"
+        assert get_required_permission("DELETE", url, BASE_URL) == "VM.Snapshot"
+
     def test_get_rrddata(self):
         url = f"{BASE_URL}/nodes/pve1/lxc/100/rrddata"
         assert get_required_permission("GET", url, BASE_URL) == "VM.Audit"

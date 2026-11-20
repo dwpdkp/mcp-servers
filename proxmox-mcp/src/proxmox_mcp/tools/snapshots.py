@@ -1,4 +1,4 @@
-"""Snapshot tools — list, create, and rollback snapshots."""
+"""Snapshot tools — list, create, rollback, and delete snapshots."""
 
 from __future__ import annotations
 
@@ -60,4 +60,22 @@ async def rollback_snapshot(
     return await get_client().fetch_and_validate(
         f"/nodes/{node}/{type}/{vmid}/snapshot/{snapname}/rollback",
         ProxmoxTaskResponse, method="POST",
+    )
+
+
+@mcp.tool()
+@safety_checked
+async def delete_snapshot(
+    node: str,
+    vmid: int,
+    type: Literal["lxc", "qemu"],
+    snapname: str,
+    confirmed: bool = False,
+) -> dict:
+    """Delete one snapshot of a VM or LXC container. The instance itself is untouched."""
+    if snapname == "current":
+        raise ValueError("'current' is the live state, not a snapshot")
+    return await get_client().fetch_and_validate(
+        f"/nodes/{node}/{type}/{vmid}/snapshot/{snapname}",
+        ProxmoxTaskResponse, method="DELETE",
     )

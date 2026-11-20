@@ -28,7 +28,7 @@ An MCP (Model Context Protocol) server for managing Proxmox VE infrastructure th
 - **`set_vm_cloudinit`**: Configure cloud-init (user, SSH keys, network)
 
 ### Protection
-- **`create_snapshot`** / **`rollback_snapshot`** / **`list_snapshots`**: Snapshot management
+- **`create_snapshot`** / **`rollback_snapshot`** / **`delete_snapshot`** / **`list_snapshots`**: Snapshot management
 - **`delete_instance`**: Permanently delete a VM or container (disabled by default, requires double confirmation)
 - **`get_task_status`** / **`get_task_log`**: Monitor background operations
 - **`get_mcp_logs`**: Server-side log inspection

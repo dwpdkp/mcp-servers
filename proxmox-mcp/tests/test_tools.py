@@ -223,6 +223,21 @@ class TestSnapshotTools:
         )
 
 
+    async def test_delete_snapshot(self, mock_client):
+        from proxmox_mcp.tools.snapshots import delete_snapshot
+        await delete_snapshot(node="pve1", vmid=100, type="lxc", snapname="snap1", confirmed=True)
+        mock_client.assert_called_once_with(
+            "/nodes/pve1/lxc/100/snapshot/snap1",
+            ProxmoxTaskResponse, method="DELETE",
+        )
+
+    async def test_delete_snapshot_refuses_current(self, mock_client):
+        from proxmox_mcp.tools.snapshots import delete_snapshot
+        with pytest.raises(ValueError):
+            await delete_snapshot(node="pve1", vmid=100, type="lxc", snapname="current", confirmed=True)
+        mock_client.assert_not_called()
+
+
 # --- Cloud-init tools ---
 
 class TestCloudinitTools:

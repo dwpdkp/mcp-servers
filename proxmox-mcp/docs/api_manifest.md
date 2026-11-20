@@ -353,6 +353,13 @@ Returns a list of log lines from the background task execution.
 
 ---
 
+## Tool: `delete_snapshot`
+**MCP Tool Name:** `delete_snapshot`  
+**Proxmox Endpoint:** `DELETE /api2/json/nodes/{node}/{type}/{vmid}/snapshot/{snapname}`  
+**Safety:** restricted, requires `confirmed=true`. Refuses `current`. Needs `VM.Snapshot`.
+
+---
+
 ## Tool: `get_resource_usage`
 **MCP Tool Name:** `get_resource_usage`  
 **Proxmox Endpoint:** `GET /api2/json/nodes/{node}/{type}/{vmid}/rrddata`

@@ -30,6 +30,9 @@ PERMISSION_MAP = {
     ("POST", "/nodes/.*/qemu/.*/snapshot/.*/rollback$"): "VM.Snapshot",
     ("GET", "/nodes/.*/lxc/.*/rrddata$"): "VM.Audit",
     ("GET", "/nodes/.*/qemu/.*/rrddata$"): "VM.Audit",
+    # Must precede the instance DELETE patterns below, which also match this path
+    ("DELETE", "/nodes/.*/lxc/.*/snapshot/[^/]+$"): "VM.Snapshot",
+    ("DELETE", "/nodes/.*/qemu/.*/snapshot/[^/]+$"): "VM.Snapshot",
     ("DELETE", "/nodes/.*/lxc/.*$"): "VM.Allocate",
     ("DELETE", "/nodes/.*/qemu/.*$"): "VM.Allocate",
 }
