@@ -47,3 +47,13 @@ def test_vmid_rejects_negative():
 def test_vmid_rejects_string():
     with pytest.raises(ValueError):
         sanitize_vmid("abc")
+
+
+def test_upid_allows_token_suffix():
+    upid = "UPID:pve02:001F456F:089D7502:6B00B03E:vzreboot:108:root@pam!claude-code-v2:"
+    assert sanitize_identifier(upid, allow_colons=True) == upid
+
+
+def test_plain_identifier_still_rejects_at_and_bang():
+    with pytest.raises(ValueError):
+        sanitize_identifier("root@pam!x")

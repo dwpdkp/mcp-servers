@@ -8,7 +8,11 @@ from mcp.server.fastmcp.exceptions import ToolError
 
 from proxmox_mcp.server import mcp
 from proxmox_mcp.tools import safety_checked, get_client
-from proxmox_mcp.models import ProxmoxTaskResponse, ProxmoxUpdateConfigResponse
+from proxmox_mcp.models import (
+    ProxmoxClusterStatusResponse,
+    ProxmoxTaskResponse,
+    ProxmoxUpdateConfigResponse,
+)
 
 
 @mcp.tool()
@@ -154,4 +158,33 @@ async def delete_instance(
     return await get_client().fetch_and_validate(
         f"/nodes/{node}/{type}/{vmid}",
         ProxmoxTaskResponse, method="DELETE",
+    )
+
+
+@mcp.tool()
+@safety_checked
+async def reboot_node(node: str, confirm_node: str, confirmed: bool = False) -> dict:
+    """Reboot a Proxmox HOST node (every guest on it goes down with it).
+
+    confirm_node must repeat the node name. Refuses unless the cluster is quorate
+    and every other member node is online, so one reboot can't drop quorum.
+    Confirm the reboot afterwards by the node's uptime resetting (list_nodes).
+    """
+    if confirm_node != node:
+        raise ToolError(f"confirm_node '{confirm_node}' does not match node '{node}'")
+    status = (await get_client().fetch_and_validate(
+        "/cluster/status", ProxmoxClusterStatusResponse))["data"]
+    cluster = next((e for e in status if e.get("type") == "cluster"), None)
+    members = [e for e in status if e.get("type") == "node"]
+    if not any(m.get("name") == node for m in members):
+        raise ToolError(f"node '{node}' is not a cluster member")
+    if cluster is not None:
+        if not cluster.get("quorate"):
+            raise ToolError("cluster is not quorate; refusing to reboot a node")
+        down = [m["name"] for m in members if m.get("name") != node and not m.get("online")]
+        if down:
+            raise ToolError(f"other node(s) offline: {', '.join(down)}; reboot would risk quorum")
+    return await get_client().fetch_and_validate(
+        f"/nodes/{node}/status", ProxmoxUpdateConfigResponse,
+        method="POST", params={"command": "reboot"},
     )

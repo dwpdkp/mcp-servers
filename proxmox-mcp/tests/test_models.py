@@ -241,8 +241,8 @@ class TestProxmoxSnapshot:
         assert snap.parent == "snap0"
 
     def test_missing_snaptime(self):
-        with pytest.raises(ValidationError):
-            ProxmoxSnapshot(name="snap1")
+        # The "current" pseudo-snapshot has no snaptime, so it must be optional
+        assert ProxmoxSnapshot(name="current").snaptime is None
 
     def test_list_response(self):
         resp = ProxmoxSnapshotListResponse(data=[

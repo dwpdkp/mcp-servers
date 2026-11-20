@@ -270,11 +270,16 @@ class TestCloudinitTools:
 class TestExecTools:
     async def test_execute_lxc_command(self, mock_client):
         from proxmox_mcp.tools.exec import execute_lxc_command
-        await execute_lxc_command(node="pve1", vmid=100, command="ls -la", confirmed=True)
-        call_args = mock_client.call_args
-        assert call_args[0][0] == "/nodes/pve1/lxc/100/exec"
-        assert call_args[1]["method"] == "POST"
-        assert call_args[1]["params"]["command"] == "ls -la"
+        # Runs over SSH (`pct exec`), not the REST API; stub the subprocess
+        proc = AsyncMock()
+        proc.communicate.return_value = (b"out", b"")
+        proc.returncode = 0
+        with patch("asyncio.create_subprocess_exec", AsyncMock(return_value=proc)) as spawn:
+            await execute_lxc_command(node="pve1", vmid=100, command="ls -la", confirmed=True)
+        argv = spawn.call_args.args
+        assert argv[0] == "ssh" and argv[-2].endswith("@pve1")
+        assert argv[-1] == "sudo pct exec 100 -- ls -la"
+        mock_client.assert_not_called()
 
 
 # --- Metrics tools ---
@@ -286,3 +291,48 @@ class TestMetricsTools:
         call_args = mock_client.call_args
         assert call_args[0][0] == "/nodes/pve1/lxc/100/rrddata"
         assert call_args[1]["params"] == {"timeframe": "hour"}
+
+
+# --- Node power ---
+
+CLUSTER_OK = {"data": [
+    {"type": "cluster", "quorate": 1},
+    {"type": "node", "name": "pve1", "online": 1},
+    {"type": "node", "name": "pve2", "online": 1},
+]}
+
+
+class TestRebootNode:
+    async def test_reboot_node_success(self, mock_client):
+        from proxmox_mcp.tools.lifecycle import reboot_node
+        mock_client.side_effect = [CLUSTER_OK, {"data": None}]
+        await reboot_node(node="pve1", confirm_node="pve1", confirmed=True)
+        assert mock_client.call_args_list[1].args[0] == "/nodes/pve1/status"
+        assert mock_client.call_args_list[1].kwargs["params"] == {"command": "reboot"}
+        assert mock_client.call_args_list[1].kwargs["method"] == "POST"
+
+    async def test_reboot_node_confirm_mismatch(self, mock_client):
+        from proxmox_mcp.tools.lifecycle import reboot_node
+        with pytest.raises(ToolError, match="does not match"):
+            await reboot_node(node="pve1", confirm_node="pve2", confirmed=True)
+        mock_client.assert_not_called()
+
+    async def test_reboot_node_refuses_when_peer_offline(self, mock_client):
+        from proxmox_mcp.tools.lifecycle import reboot_node
+        mock_client.return_value = {"data": [
+            {"type": "cluster", "quorate": 1},
+            {"type": "node", "name": "pve1", "online": 1},
+            {"type": "node", "name": "pve2", "online": 0},
+        ]}
+        with pytest.raises(ToolError, match="offline: pve2"):
+            await reboot_node(node="pve1", confirm_node="pve1", confirmed=True)
+        assert mock_client.call_count == 1
+
+    async def test_reboot_node_refuses_when_not_quorate(self, mock_client):
+        from proxmox_mcp.tools.lifecycle import reboot_node
+        mock_client.return_value = {"data": [
+            {"type": "cluster", "quorate": 0},
+            {"type": "node", "name": "pve1", "online": 1},
+        ]}
+        with pytest.raises(ToolError, match="not quorate"):
+            await reboot_node(node="pve1", confirm_node="pve1", confirmed=True)

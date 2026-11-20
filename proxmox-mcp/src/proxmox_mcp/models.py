@@ -160,3 +160,8 @@ class ProxmoxResourceUsageResponse(BaseModel):
 
 class ProxmoxExecResponse(BaseModel):
     data: Dict[str, Any]  # Contains PID and UPID
+
+
+class ProxmoxClusterStatusResponse(BaseModel):
+    """GET /cluster/status: one 'cluster' entry plus one 'node' entry per member."""
+    data: List[Dict[str, Any]]

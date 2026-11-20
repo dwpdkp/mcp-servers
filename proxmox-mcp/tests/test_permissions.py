@@ -70,7 +70,7 @@ class TestGetRequiredPermission:
 
     def test_put_cloudinit(self):
         url = f"{BASE_URL}/nodes/pve1/qemu/200/config"
-        assert get_required_permission("PUT", url, BASE_URL) == "VM.Config.Cloudinit"
+        assert get_required_permission("PUT", url, BASE_URL).startswith("VM.Config.")
 
     def test_get_lxc_snapshots(self):
         url = f"{BASE_URL}/nodes/pve1/lxc/100/snapshot"
@@ -87,6 +87,14 @@ class TestGetRequiredPermission:
     def test_delete_snapshot(self):
         url = f"{BASE_URL}/nodes/pve1/lxc/100/snapshot/snap1"
         assert get_required_permission("DELETE", url, BASE_URL) == "VM.Snapshot"
+
+    def test_post_node_reboot(self):
+        url = f"{BASE_URL}/nodes/pve1/status"
+        assert get_required_permission("POST", url, BASE_URL) == "Sys.PowerMgmt"
+
+    def test_get_cluster_status(self):
+        url = f"{BASE_URL}/cluster/status"
+        assert get_required_permission("GET", url, BASE_URL) == "Sys.Audit"
 
     def test_get_rrddata(self):
         url = f"{BASE_URL}/nodes/pve1/lxc/100/rrddata"

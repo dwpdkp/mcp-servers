@@ -353,6 +353,13 @@ Returns a list of log lines from the background task execution.
 
 ---
 
+## Tool: `reboot_node`
+**MCP Tool Name:** `reboot_node`  
+**Proxmox Endpoint:** `GET /api2/json/cluster/status`, then `POST /api2/json/nodes/{node}/status` (`command=reboot`)  
+**Safety:** restricted, requires `confirmed=true` and `confirm_node` equal to `node`. Refuses when the cluster is not quorate or any other member is offline. Needs `Sys.Audit` + `Sys.PowerMgmt`.
+
+---
+
 ## Tool: `delete_snapshot`
 **MCP Tool Name:** `delete_snapshot`  
 **Proxmox Endpoint:** `DELETE /api2/json/nodes/{node}/{type}/{vmid}/snapshot/{snapname}`  

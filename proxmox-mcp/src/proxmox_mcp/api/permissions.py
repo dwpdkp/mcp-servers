@@ -2,6 +2,8 @@ import re
 
 PERMISSION_MAP = {
     ("GET", "/nodes$"): "Sys.Audit",
+    ("GET", "/cluster/status$"): "Sys.Audit",
+    ("POST", "/nodes/[^/]+/status$"): "Sys.PowerMgmt",
     ("GET", "/nodes/.*/lxc$"): "VM.Audit",
     ("GET", "/nodes/.*/qemu$"): "VM.Audit",
     ("GET", "/nodes/.*/lxc/.*/config$"): "VM.Audit",

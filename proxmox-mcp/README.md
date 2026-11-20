@@ -23,6 +23,7 @@ An MCP (Model Context Protocol) server for managing Proxmox VE infrastructure th
 
 ### Management
 - **`power_control`**: Start, stop, shutdown, reboot VMs and containers
+- **`reboot_node`**: Reboot a host node (requires `confirmed=true` and `confirm_node`; refuses if the cluster isn't quorate or a peer is offline; token needs `Sys.PowerMgmt`)
 - **`create_lxc`** / **`create_vm`**: Provision new infrastructure
 - **`execute_lxc_command`**: Run shell commands inside containers
 - **`set_vm_cloudinit`**: Configure cloud-init (user, SSH keys, network)

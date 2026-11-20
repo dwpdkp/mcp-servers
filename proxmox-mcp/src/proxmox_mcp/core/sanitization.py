@@ -5,9 +5,10 @@ from typing import Any
 def sanitize_identifier(value: Any, allow_colons: bool = False) -> str:
     """Ensures identifiers are alphanumeric (plus underscores/hyphens/dots, optionally colons for UPIDs)."""
     s = str(value)
-    pattern = r"^[a-zA-Z0-9\._\-:]+$" if allow_colons else r"^[a-zA-Z0-9\._\-]+$"
+    # UPIDs from API-token callers end in user@realm!tokenid:, so colon mode allows @ and !
+    pattern = r"^[a-zA-Z0-9\._\-:@!]+$" if allow_colons else r"^[a-zA-Z0-9\._\-]+$"
     if not re.match(pattern, s):
-        allowed = "alphanumeric characters, dots, underscores, hyphens, and colons" if allow_colons else "alphanumeric characters, dots, underscores, and hyphens"
+        allowed = "alphanumeric characters, dots, underscores, hyphens, colons, @ and !" if allow_colons else "alphanumeric characters, dots, underscores, and hyphens"
         raise ValueError(f"Invalid identifier: '{s}'. Only {allowed} are allowed.")
     return s
 
